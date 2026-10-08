@@ -26,8 +26,8 @@ Chrome, Edge, Brave, Opera and Firefox.
   is saved. Works through post-processing too.
 - **Ready to import.** The model is centered and stands on the floor, meshes keep their places, missing normals are
   computed (hard edges stay hard), vertices drawn separately are welded back together.
-- **Clean output.** Shadow-map and depth passes, axis gizmos, full-screen post-processing passes and duplicate draws
-  are left out automatically.
+- **Clean output.** Shadow-map and depth passes, move and axis gizmos, outlines, full-screen post-processing passes
+  and duplicate draws are left out automatically; sky domes are offered unselected.
 - **Exact textures.** Saved byte for byte at their real size, including compressed (DXT/S3TC), float, half-float and
   luminance textures, and color under transparent pixels.
 - **Light on the page.** Nothing is hooked per draw call until you press the hotkey; exports are streamed in small

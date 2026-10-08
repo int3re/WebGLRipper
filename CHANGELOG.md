@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.1.3
+
+### Fixed
+
+- Editor-style viewers (seen on studio.tripo3d.ai) exported their helpers together with the model: the move gizmo
+  (arrows, cones, plane handles), the axis gizmo in the corner, a full-screen pass and a big background sphere, which
+  also made the model look tiny in the preview. Now:
+  - helpers drawn on top of the scene — without depth testing while the rest of the scene uses it — are left out,
+    together with the copies other passes draw of them (outline and depth passes);
+  - the axis gizmo is recognized again when the full-screen passes share one triangle: the largest viewport of a
+    target is taken from every draw call, not only from the recorded ones;
+  - full-screen passes are recognized by their geometry (a triangle or quad covering clip space), also when they
+    sample an image texture besides the frame;
+  - sky domes and other position-only shells around the scene are marked as *background*: the preview offers them
+    unselected, and without the preview they aren't downloaded;
+  - when the remaining meshes don't show the camera, it is taken from the other draws of the scene, so the model
+    stays in its place.
+- The preview's grid is sized to the selected meshes, not to a sky dome around them.
+- `rip-info.json` lists the depth and face state of every mesh and whether it was taken for a background.
+
 ## 1.1.2
 
 ### Performance

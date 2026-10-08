@@ -129,7 +129,8 @@ const GL = {
 
 	PACK_ALIGNMENT: 0x0D05, PACK_ROW_LENGTH: 0x0D02, PACK_SKIP_ROWS: 0x0D03, PACK_SKIP_PIXELS: 0x0D04,
 
-	VIEWPORT: 0x0BA2, COLOR_WRITEMASK: 0x0C23,
+	VIEWPORT: 0x0BA2, COLOR_WRITEMASK: 0x0C23, DEPTH_WRITEMASK: 0x0B72,
+	CULL_FACE_MODE: 0x0B45, FRONT_FACE: 0x0B46, FRONT: 0x0404, BACK: 0x0405, CW: 0x0900, CCW: 0x0901,
 	BLEND: 0x0BE2, CULL_FACE: 0x0B44, DEPTH_TEST: 0x0B71, STENCIL_TEST: 0x0B90, SCISSOR_TEST: 0x0C11,
 	DITHER: 0x0BD0, POLYGON_OFFSET_FILL: 0x8037, SAMPLE_ALPHA_TO_COVERAGE: 0x809E, SAMPLE_COVERAGE: 0x80A0,
 	RASTERIZER_DISCARD: 0x8C89, SAMPLES: 0x80A9,
@@ -986,6 +987,7 @@ class CaptureSession {
 		this.stats = { unsupportedMode: 0, noPosition: 0, duplicates: 0, overlays: 0, unreadable: 0, errors: 0 };
 		this.unrecognizedAttributes = new Set();
 		this.targets = new Map();        // framebuffer id -> { draws, last }: how many draw calls, and the last one
+		this.surfaces = new Map();       // "context:framebuffer" -> { area, depth }: largest viewport, any depth-tested draw
 		this.feeds = new Map();          // framebuffer id -> ids of the framebuffers whose textures were sampled into it
 		this.uniforms = new Map();       // program -> Map("name#element" -> value) set during this capture
 		this.removeHooks = () => {};
@@ -1444,6 +1446,18 @@ class ContextCapture {
 		} else {
 			s.targets.set(target, { draws: 1, last: s.drawCount });
 		}
+		// Every draw call counts here, also the ones that are skipped below: viewer overlays are told apart from the
+		// scene by comparing them with everything else drawn into the same target.
+		const depthTest = g.isEnabled(GL.DEPTH_TEST);
+		const area = Math.max(0, viewport[2]) * Math.max(0, viewport[3]);
+		const surfaceKey = `${this.index}:${target}`;
+		const surface = s.surfaces.get(surfaceKey);
+		if (surface) {
+			surface.area = Math.max(surface.area, area);
+			surface.depth = surface.depth || depthTest;
+		} else {
+			s.surfaces.set(surfaceKey, { area, depth: depthTest });
+		}
 		const info = this.programInfo(program);
 		// read before the position check: full-screen passes without attributes still link render targets
 		const textures = this.boundTextures(program, info, target);
@@ -1509,6 +1523,13 @@ class ContextCapture {
 			return;
 		}
 
+		const culling = g.isEnabled(GL.CULL_FACE);
+		let insideOut = false;
+		if (culling) {
+			// only the inside is drawn: a sky dome or an environment box around the camera
+			const cull = g.getParameter(GL.CULL_FACE_MODE), front = g.getParameter(GL.FRONT_FACE);
+			insideOut = (cull === GL.BACK && front === GL.CW) || (cull === GL.FRONT && front === GL.CCW);
+		}
 		const mesh = {
 			context: this,
 			draw: s.drawCount,
@@ -1522,7 +1543,10 @@ class ContextCapture {
 			color: this.readColor(program, info.colors.base),
 			emissive: this.readColor(program, info.colors.emissive),
 			blend: g.isEnabled(GL.BLEND),
-			doubleSided: !g.isEnabled(GL.CULL_FACE),
+			doubleSided: !culling,
+			insideOut,
+			depthTest,
+			depthWrite: !!g.getParameter(GL.DEPTH_WRITEMASK),
 			vertexCount: unique.length,
 			triangles: remapped,
 			positions,
@@ -2341,27 +2365,38 @@ function formatNumber(value) {
 
 function finalizeMeshes(session) {
 	let meshes = session.meshes.slice();
+	const closer = targetOrder(session);
 	if (session.settings.skipOverlays) {
-		// Viewer chrome goes first, so a gizmo drawing the same geometry can't win over the model below: gizmos and
-		// minimaps use a small viewport of the same target, and post-processing passes are a full-screen triangle or
-		// quad that samples textures the page rendered itself.
-		const area = (m) => Math.max(0, m.viewport[2]) * Math.max(0, m.viewport[3]);
-		const largest = new Map();
+		// Viewer chrome goes first, so a gizmo drawing the same geometry can't win over the model below:
+		// - axis gizmos and minimaps use a small viewport of a target the scene fills,
+		// - post-processing and background passes are a triangle or quad covering the screen, sampling textures the
+		//   page rendered itself or drawn without depth testing,
+		// - move/rotate gizmos, handles and labels are drawn on top of a scene that otherwise uses depth testing.
+		const surfaceOf = (mesh) => session.surfaces.get(`${mesh.context.index}:${mesh.target}`) || { area: 0, depth: false };
+		const onTop = (mesh) => surfaceOf(mesh).depth && !mesh.depthTest && !mesh.depthWrite;
+		// A gizmo also turns up in passes that redraw the scene with depth testing (outlines, depth pre-passes): what
+		// counts is how a geometry is drawn into the target closest to the screen.
+		const visible = new Map(); // geometryKey -> { target, onTop }
 		for (const mesh of meshes) {
-			const key = `${mesh.context.index}:${mesh.target}`;
-			largest.set(key, Math.max(largest.get(key) || 0, area(mesh)));
+			const entry = visible.get(mesh.geometryKey);
+			if (!entry || closer(mesh.target, entry.target) > 0)
+				visible.set(mesh.geometryKey, { target: mesh.target, onTop: onTop(mesh) });
+			else if (mesh.target === entry.target)
+				entry.onTop = entry.onTop && onTop(mesh);
 		}
 		meshes = meshes.filter(mesh => {
-			const overlay = area(mesh) < 0.25 * largest.get(`${mesh.context.index}:${mesh.target}`);
-			const screenPass = mesh.vertexCount <= 4 && mesh.textures.length > 0 &&
-				mesh.textures.every(t => renderTargetTextures.has(t.texture));
-			if (overlay || screenPass)
+			const area = Math.max(0, mesh.viewport[2]) * Math.max(0, mesh.viewport[3]);
+			const overlay = area < 0.25 * surfaceOf(mesh).area;
+			const sampled = mesh.textures.filter(t => renderTargetTextures.has(t.texture)).length;
+			const screenPass = mesh.vertexCount <= 4 && ((sampled > 0 && sampled === mesh.textures.length) ||
+				(coversClipSpace(mesh.positions) && (sampled > 0 || !mesh.depthTest || !mesh.normals)));
+			const helper = visible.get(mesh.geometryKey).onTop;
+			if (overlay || screenPass || helper)
 				session.stats.overlays++;
-			return !overlay && !screenPass;
+			return !overlay && !screenPass && !helper;
 		});
 	}
 
-	const closer = targetOrder(session);
 	if (session.settings.skipDuplicates) {
 		// Shadow maps, reflections and depth pre-passes draw the same geometry again. When that happened, keep
 		// the draws that went to the target closest to the screen ...
@@ -2397,25 +2432,43 @@ function finalizeMeshes(session) {
 			return !drop;
 		});
 	}
-	// The camera of a context is the one most of its remaining draws used
-	const cameras = new Map();
-	for (const mesh of meshes) {
-		const view = mesh.matrix && mesh.matrix.view;
-		if (!view)
-			continue;
-		let counts = cameras.get(mesh.context);
-		if (!counts)
-			cameras.set(mesh.context, counts = new Map());
-		const key = Array.prototype.join.call(view, ',');
-		const entry = counts.get(key);
-		if (entry) entry.count++;
-		else counts.set(key, { view, count: 1 });
-	}
-	const cameraOf = (context) => {
+	// The camera of a context is the one most of its remaining draws used. When none of them shows it, the other draws
+	// of the scene can (a gizmo or a depth pass drawn with the same camera), but not the ones in a corner viewport,
+	// which have a camera of their own.
+	const camerasOf = (list) => {
+		const cameras = new Map();
+		for (const mesh of list) {
+			const view = mesh.matrix && mesh.matrix.view;
+			if (!view)
+				continue;
+			let counts = cameras.get(mesh.context);
+			if (!counts)
+				cameras.set(mesh.context, counts = new Map());
+			const key = Array.prototype.join.call(view, ',');
+			const entry = counts.get(key);
+			if (entry) entry.count++;
+			else counts.set(key, { view, count: 1 });
+		}
+		return cameras;
+	};
+	const mostUsed = (counts) => {
 		let best = null;
-		for (const entry of (cameras.get(context) || new Map()).values()) {
+		for (const entry of (counts || new Map()).values()) {
 			if (!best || entry.count > best.count)
 				best = entry;
+		}
+		return best;
+	};
+	const cameras = camerasOf(meshes);
+	let sceneCameras = null;
+	const cameraOf = (context) => {
+		let best = mostUsed(cameras.get(context));
+		if (!best) {
+			sceneCameras = sceneCameras || camerasOf(session.meshes.filter(mesh => {
+				const surface = session.surfaces.get(`${mesh.context.index}:${mesh.target}`);
+				return !surface || mesh.viewport[2] * mesh.viewport[3] >= 0.25 * surface.area;
+			}));
+			best = mostUsed(sceneCameras.get(context));
 		}
 		return best ? best.view : null;
 	};
@@ -2453,12 +2506,70 @@ function finalizeMeshes(session) {
 		}
 		if (session.settings.weldVertices)
 			weldVertices(mesh);
+		mesh.hadNormals = !!mesh.normals;
 		if (!mesh.normals && session.settings.computeNormals)
 			computeNormals(mesh);
 	}
+	if (session.settings.skipOverlays)
+		markBackgrounds(meshes);
 	if (session.pick)
 		markPickedMesh(meshes, closer);
 	return meshes;
+}
+
+/* Positions of a full-screen pass, given in clip space: a quad from -1 to 1 or a triangle from -1 to 3, flat. */
+function coversClipSpace(positions) {
+	let minX = Infinity, minY = Infinity, minZ = Infinity, maxX = -Infinity, maxY = -Infinity, maxZ = -Infinity;
+	for (let i = 0; i < positions.length; i += 3) {
+		minX = Math.min(minX, positions[i]);
+		maxX = Math.max(maxX, positions[i]);
+		minY = Math.min(minY, positions[i + 1]);
+		maxY = Math.max(maxY, positions[i + 1]);
+		minZ = Math.min(minZ, positions[i + 2]);
+		maxZ = Math.max(maxZ, positions[i + 2]);
+	}
+	return minX <= -0.99 && minY <= -0.99 && maxX >= 0.99 && maxY >= 0.99 && minX >= -1.01 && minY >= -1.01 &&
+		maxX <= 3.01 && maxY <= 3.01 && maxZ - minZ <= 1e-3 && minZ >= -1 && maxZ <= 1;
+}
+
+/* Sky domes and environment shells: meshes made of positions only (a gradient or color computed in the shader) that
+ * are drawn from the inside or enclose everything else. They are kept, but not selected by default. */
+function markBackgrounds(meshes) {
+	if (meshes.length < 2)
+		return;
+	const boxes = meshes.map(mesh => {
+		const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+		const p = mesh.positions;
+		for (let i = 0; i < p.length; i += 3) {
+			for (let k = 0; k < 3; k++) {
+				if (p[i + k] < lo[k]) lo[k] = p[i + k];
+				if (p[i + k] > hi[k]) hi[k] = p[i + k];
+			}
+		}
+		return { lo, hi };
+	});
+	const candidates = meshes.map(mesh => !mesh.hadNormals && !mesh.uvs && !mesh.colors && mesh.textures.length === 0 && mesh.vertexCount >= 8);
+	const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+	meshes.forEach((mesh, i) => {
+		if (candidates[i])
+			return;
+		for (let k = 0; k < 3; k++) {
+			lo[k] = Math.min(lo[k], boxes[i].lo[k]);
+			hi[k] = Math.max(hi[k], boxes[i].hi[k]);
+		}
+	});
+	if (!(lo[0] <= hi[0]))
+		return; // nothing but candidates: keep them all
+	const size = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+	meshes.forEach((mesh, i) => {
+		if (!candidates[i])
+			return;
+		const box = boxes[i];
+		const encloses = [0, 1, 2].every(k => box.lo[k] <= lo[k] && box.hi[k] >= hi[k]) &&
+			Math.hypot(box.hi[0] - box.lo[0], box.hi[1] - box.lo[1], box.hi[2] - box.lo[2]) >= 1.5 * size;
+		if (mesh.insideOut || encloses)
+			mesh.background = true;
+	});
 }
 
 /* Orders the render targets of a capture by how directly they reach the screen: the canvas, then a target that is
@@ -2491,7 +2602,8 @@ function targetOrder(session) {
  * render target closest to the screen (shadow maps and the like change other pixels of their own). */
 function markPickedMesh(meshes, closer) {
 	let picked = null;
-	for (const mesh of meshes) {
+	const hits = meshes.filter(mesh => mesh.pickHit && !mesh.background);
+	for (const mesh of hits.length ? hits : meshes) {
 		if (!mesh.pickHit)
 			continue;
 		const order = picked ? closer(mesh.target, picked.target) : 1;
@@ -3242,6 +3354,9 @@ async function writeExport(capture, scene, meshes, format, progress) {
 				normals: mesh.normalsComputed ? 'computed' : mesh.normals ? 'from page' : 'none',
 				transform: mesh.transform,
 				viewport: mesh.viewport,
+				state: { depthTest: mesh.depthTest, depthWrite: mesh.depthWrite, blend: mesh.blend,
+					faces: mesh.doubleSided ? 'both' : mesh.insideOut ? 'inside' : 'outside' },
+				background: !!mesh.background,
 				matrix: mesh.matrix && mesh.matrix.m ? { kind: mesh.matrix.kind, values: Array.from(mesh.matrix.m, v => +v.toFixed(6)) } : null,
 				material: mesh.material.name,
 				textures: mesh.textures.map(t => ({ slot: t.slot, uniform: t.uniform, file: t.entry ? t.entry.file || null : null }))
@@ -3275,7 +3390,8 @@ function previewData(capture, scene) {
 				textureWidth: base ? base.entry.png.width : 0,
 				textureHeight: base ? base.entry.png.height : 0,
 				picked: !!mesh.picked,
-				selected: capture.pick ? !!mesh.picked : true
+				background: !!mesh.background,
+				selected: capture.pick ? !!mesh.picked : !mesh.background
 			};
 		})
 	};
@@ -3396,7 +3512,8 @@ async function finishCapture(capture) {
 			: viewerApi ? (data) => viewerApi.open(data) : null;
 		const previewing = capture.settings.preview && !!chooser;
 		const scene = await prepareCapture(capture, progress, previewing);
-		let meshes = capture.pick ? scene.meshes.filter(mesh => mesh.picked) : scene.meshes;
+		// backgrounds are only downloaded when chosen in the preview
+		let meshes = scene.meshes.filter(mesh => capture.pick ? mesh.picked : !mesh.background);
 		let format = capture.settings.format;
 		if (previewing) {
 			setStatus('preview', 'Choose what to keep in the page, then press Download.');

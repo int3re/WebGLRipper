@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addFailures, checkCubeZip, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
+import { addFailures, checkCubeZip, checkEditorResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
 import { build } from '../scripts/build.mjs';
 
 const HEADFUL = process.argv.includes('--headful');
@@ -146,6 +146,17 @@ async function threeTests(devtools, base) {
 	checkThreeResults(results);
 	report('no uncaught page errors', page.errors.length === 0, page.errors);
 	await devtools.send('Target.closeTarget', { targetId: page.targetId });
+
+	console.log('\n== Editor-style viewer (tests/editor.html) ==');
+	const editor = await openPage(devtools, `${base}/tests/editor.html`);
+	const editorResults = await poll(() => evaluate(devtools, editor.sessionId, 'window.testResults || null'), 30000);
+	if (!editorResults) {
+		report('editor viewer capture finished', false, editor.errors.concat(editor.logs.slice(-5)));
+		return;
+	}
+	checkEditorResults(editorResults);
+	report('no uncaught page errors', editor.errors.length === 0, editor.errors);
+	await devtools.send('Target.closeTarget', { targetId: editor.targetId });
 }
 
 async function extensionTests(devtools, base) {

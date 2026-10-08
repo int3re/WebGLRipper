@@ -123,6 +123,22 @@ export function checkThreeResults(results) {
 	report('pick mode through a half-float render target (EffectComposer) finds the gem', pick.state === 'done' && pick.objects === 1 && pick.vertices === 92, pick);
 }
 
+/* Expectations for tests/editor.html: an editor-style viewer with a move gizmo, an outline, SMAA, an axis gizmo and a
+ * sky sphere. Only the model is exported; the sky is offered in the preview but not selected. */
+export function checkEditorResults(results) {
+	report('editor viewer capture done', results.state === 'done' && results.direct.state === 'done', results.text);
+	const preview = results.preview || [];
+	const background = preview.filter(m => m.background);
+	report('preview: the model and the sky only (move gizmo, outline, SMAA passes and axis gizmo left out)',
+		preview.length === 2 && background.length === 1 && background[0].vertices > 1000, preview);
+	report('preview: the sky is marked as background and not selected, the model is selected',
+		preview.every(m => m.selected === !m.background), preview);
+	const glb = results.glb || [];
+	const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 0.02);
+	report('GLB: just the model, in its place at (0.5, 0.3, 0)', glb.length === 1 && near(glb[0].center, [0.5, 0.3, 0]), glb);
+	report('without the preview: one OBJ (the background is not downloaded)', results.direct.objs === 1, results.direct);
+}
+
 /* Checks the .glb from the pick + preview end-to-end test: just the cube, textured, standing on the origin. */
 export function checkPickedCube(label, buffer) {
 	try {

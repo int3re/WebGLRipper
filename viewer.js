@@ -55,6 +55,7 @@ h1 { margin: 0; font-size: 15px; font-weight: 600; }
 .item canvas { width: 34px; height: 34px; border-radius: 6px; flex: none; background: #3c4048; }
 .item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .badge { color: #13161a; background: #fdd663; border-radius: 4px; padding: 0 5px; font-size: 11px; margin-left: 6px; }
+.item .badge.muted { color: #c4c9d2; background: #3c4048; }
 .item .tris { color: #9aa0a6; font-size: 12px; white-space: nowrap; }
 input[type="checkbox"] { width: 16px; height: 16px; accent-color: #8ab4f8; flex: none; margin: 0; }
 .section { padding: 12px 16px 0; color: #9aa0a6; font-size: 12px; }
@@ -357,7 +358,8 @@ class View {
 
 	buildGrid() {
 		const gl = this.gl;
-		const box = this.bounds(false) || { lo: [-1, 0, -1], hi: [1, 1, 1] };
+		// around what will be downloaded: a sky dome would make the grid huge
+		const box = this.bounds(true) || this.bounds(false) || { lo: [-1, 0, -1], hi: [1, 1, 1] };
 		const size = Math.max(box.hi[0] - box.lo[0], box.hi[2] - box.lo[2], 1e-3) * 1.6;
 		const step = Math.pow(10, Math.floor(Math.log10(size / 4)));
 		const lines = [];
@@ -681,6 +683,8 @@ function open(data) {
 			const name = element('span', 'name', mesh.name);
 			if (mesh.picked)
 				append(name, element('span', 'badge', 'picked'));
+			else if (mesh.background)
+				append(name, element('span', 'badge muted', 'background'));
 			const tris = element('span', 'tris', `${formatCount(mesh.triangleCount)} tris`);
 			append(row, checkbox, thumb, name, tris);
 			append(list, row);

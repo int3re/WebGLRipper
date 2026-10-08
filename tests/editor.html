@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper editor-style viewer test</title>
+	<!-- A viewer like studio.tripo3d.ai: the selected model has a move gizmo (TransformControls) and an outline
+	     (OutlinePass), the background is a big position-only sphere, anti-aliasing is SMAA (whose pass samples two image
+	     textures) and an axis gizmo sits in the corner. Only the model should be exported. -->
+	<script>
+		window.__WEBGLRIPPER_TEST__ = {
+			downloads: [],
+			onDownload(name, blob) { this.downloads.push({ name, blob }); }
+		};
+	</script>
+	<script src="../webglripper.js"></script>
+	<script type="importmap">
+		{ "imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+		} }
+	</script>
+</head>
+<body style="margin:0">
+	<pre id="log"></pre>
+	<script type="module">
+		import * as THREE from 'three';
+		import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+		import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+		import { OutlinePass } from 'three/addons/postprocessing/OutlinePass.js';
+		import { SMAAPass } from 'three/addons/postprocessing/SMAAPass.js';
+		import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+		import { TransformControls } from 'three/addons/controls/TransformControls.js';
+		import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
+
+		const renderer = new THREE.WebGLRenderer({ antialias: false });
+		renderer.setSize(640, 400);
+		document.body.prepend(renderer.domElement);
+		const scene = new THREE.Scene();
+		const camera = new THREE.PerspectiveCamera(45, 640 / 400, 0.1, 200);
+		camera.position.set(1.5, 1.2, 2.5);
+		camera.lookAt(0.5, 0.3, 0);
+		scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+		const light = new THREE.DirectionalLight(0xffffff, 2);
+		light.position.set(3, 5, 2);
+		scene.add(light);
+
+		// Background: a big sphere around everything, drawn from the inside with a gradient made from its positions
+		const sky = new THREE.Mesh(new THREE.SphereGeometry(20, 64, 64), new THREE.ShaderMaterial({
+			side: THREE.BackSide,
+			depthWrite: false,
+			vertexShader: 'varying float vY; void main() { vY = normalize(position).y; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }',
+			fragmentShader: 'varying float vY; void main() { gl_FragColor = vec4(mix(vec3(0.08), vec3(0.3), vY * 0.5 + 0.5), 1.0); }'
+		}));
+		sky.geometry.deleteAttribute('normal');
+		sky.geometry.deleteAttribute('uv');
+		scene.add(sky);
+
+		// The model: a textured, lit "bag"
+		const canvas = document.createElement('canvas');
+		canvas.width = canvas.height = 64;
+		const c = canvas.getContext('2d');
+		c.fillStyle = '#4a5a3a';
+		c.fillRect(0, 0, 64, 64);
+		c.fillStyle = '#7a6a4a';
+		c.fillRect(0, 28, 64, 8);
+		const texture = new THREE.CanvasTexture(canvas);
+		texture.colorSpace = THREE.SRGBColorSpace;
+		const model = new THREE.Mesh(new THREE.CapsuleGeometry(0.25, 0.8, 6, 16), new THREE.MeshStandardMaterial({ map: texture }));
+		model.rotation.z = Math.PI / 2;
+		model.position.set(0.5, 0.3, 0);
+		scene.add(model);
+
+		// Selected in the editor: move gizmo and outline
+		const controls = new TransformControls(camera, renderer.domElement);
+		controls.attach(model);
+		scene.add(controls.getHelper());
+
+		const composer = new EffectComposer(renderer);
+		composer.addPass(new RenderPass(scene, camera));
+		const outline = new OutlinePass(new THREE.Vector2(640, 400), scene, camera, [model]);
+		composer.addPass(outline);
+		composer.addPass(new SMAAPass(640, 400));
+		composer.addPass(new OutputPass());
+		const gizmo = new ViewHelper(camera, renderer.domElement);
+
+		renderer.setAnimationLoop(() => {
+			composer.render();
+			renderer.autoClear = false;
+			gizmo.render(renderer);
+			renderer.autoClear = true;
+		});
+
+		const capture = (settings) => new Promise(resolve => {
+			document.addEventListener('webglripper:ext', function listener(event) {
+				const message = JSON.parse(event.detail);
+				if (message.type === 'state' && ['done', 'error', 'idle'].includes(message.state)) {
+					document.removeEventListener('webglripper:ext', listener);
+					resolve(message);
+				}
+			});
+			document.dispatchEvent(new CustomEvent('webglripper:page', { detail: JSON.stringify({ type: 'capture', settings: { __version: 'test', ...settings } }) }));
+		});
+
+		async function run() {
+			await new Promise(r => setTimeout(r, 800));
+			const T = window.__WEBGLRIPPER_TEST__;
+			// What the preview gets
+			let preview = null;
+			T.onPreview = async (data) => {
+				preview = data.meshes.map(m => ({ vertices: m.vertexCount, triangles: m.triangleCount, selected: m.selected, background: !!m.background }));
+				return { selected: data.meshes.map((m, i) => i).filter(i => data.meshes[i].selected), format: 'glb' };
+			};
+			const withPreview = await capture({ show_preview: true, center_model: false });
+			T.onPreview = null;
+			const glbFile = T.downloads.find(d => d.name.endsWith('.glb'));
+			let glb = null;
+			if (glbFile) {
+				const bytes = new Uint8Array(await glbFile.blob.arrayBuffer());
+				const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + new DataView(bytes.buffer).getUint32(12, true))));
+				glb = json.meshes.map(mesh => {
+					const accessor = json.accessors[mesh.primitives[0].attributes.POSITION];
+					return { vertices: accessor.count, center: accessor.min.map((min, k) => +((min + accessor.max[k]) / 2).toFixed(3)) };
+				});
+			}
+			// Without the preview
+			T.downloads.length = 0;
+			const direct = await capture({ show_preview: false, export_format: 'obj', should_download_zip: false, center_model: false });
+			const objs = T.downloads.filter(d => d.name.endsWith('.obj')).length;
+			window.testResults = {
+				preview, glb, state: withPreview.state, text: withPreview.text, result: withPreview.result,
+				direct: { state: direct.state, objs, skipped: direct.result && direct.result.skipped },
+				modelVertices: model.geometry.attributes.position.count, skyVertices: sky.geometry.attributes.position.count
+			};
+			document.getElementById('log').textContent = JSON.stringify(window.testResults, null, 2);
+		}
+		run();
+	</script>
+</body>
+</html>

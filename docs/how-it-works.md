@@ -131,9 +131,13 @@ light (`directionalLights[0].color`). Blending and face culling decide transpare
 
 A frame contains a lot that isn't the model. In this order:
 
-1. **Viewer overlays.** Draws into a viewport smaller than a quarter of the largest one on the same target (axis
-   gizmos, minimaps), and full-screen passes — at most four vertices sampling only textures the page rendered itself —
-   are dropped.
+1. **Viewer overlays** are dropped:
+   - draws into a viewport smaller than a quarter of the largest one drawn into the same target (axis gizmos,
+     minimaps);
+   - full-screen passes — a triangle or quad covering clip space that samples a texture the page rendered itself or is
+     drawn without depth testing (post-processing, outlines, gradient backgrounds);
+   - helpers drawn on top of a scene that otherwise uses depth testing (move and rotate gizmos, handles, labels), with
+     the copies other passes draw of them.
 2. **The same geometry drawn more than once** (shadow maps, depth pre-passes, reflections). For every geometry the copy
    drawn into the render target **closest to the screen** is kept. The engine builds a graph of which framebuffer
    feeds which — a pass that samples a render-target texture or blits a framebuffer links them — and walks it from
@@ -145,7 +149,10 @@ A frame contains a lot that isn't the model. In this order:
    hash table — the icosahedron of the test scene goes from 240 to 42 vertices.
 5. **Normals.** Meshes drawn without normals get smooth ones: face normals are averaged around each position, but only
    between faces less than 60° apart, so hard edges stay hard.
-6. **Centering.** Optionally the whole export is moved so it stands on the origin.
+6. **Backgrounds.** Meshes made of positions only that are drawn from the inside or enclose everything else (sky
+   domes, environment shells) are kept but not selected: the preview shows them with a *background* badge, and
+   without the preview they aren't downloaded.
+7. **Centering.** Optionally the whole export is moved so it stands on the origin.
 
 ## Textures
 

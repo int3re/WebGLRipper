@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { addFailures, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
+import { addFailures, checkEditorResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
 import { build } from '../scripts/build.mjs';
 
 const HEADFUL = process.argv.includes('--headful');
@@ -148,6 +148,17 @@ async function threeTests(bidi, base) {
 	checkThreeResults(results);
 	report('no uncaught page errors', tab.errors.length === 0, tab.errors);
 	await bidi.send('browsingContext.close', { context: tab.context });
+
+	console.log('\n== Editor-style viewer (tests/editor.html) ==');
+	const editor = await openTab(bidi, `${base}/tests/editor.html`);
+	const editorResults = await poll(() => evaluate(bidi, editor.context, 'window.testResults || null'), 30000);
+	if (!editorResults) {
+		report('editor viewer capture finished', false, editor.errors);
+		return;
+	}
+	checkEditorResults(editorResults);
+	report('no uncaught page errors', editor.errors.length === 0, editor.errors);
+	await bidi.send('browsingContext.close', { context: editor.context });
 }
 
 async function extensionTests(bidi, base, downloadDir) {
