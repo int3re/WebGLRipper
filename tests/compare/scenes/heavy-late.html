@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Comparison: large model</title>
+	<!-- One mesh of grid x grid vertices with a model matrix that moves it to (1, 2, 3), and `textures` RGBA textures of
+	     size x size. The context is created after the page has loaded. -->
+</head>
+<body style="margin:0">
+	<canvas id="c" width="256" height="256"></canvas>
+	<script>
+	'use strict';
+	window.addEventListener('load', () => setTimeout(start, 500));
+	function start() {
+	const params = new URLSearchParams(location.search);
+	const GRID = +(params.get('grid') || 700);
+	const TEXTURES = +(params.get('textures') || 2);
+	const SIZE = +(params.get('size') || 4096);
+	const gl = document.getElementById('c').getContext('webgl2');
+
+	const count = GRID * GRID;
+	const positions = new Float32Array(count * 3), normals = new Float32Array(count * 3), uvs = new Float32Array(count * 2);
+	for (let y = 0, i = 0; y < GRID; y++) {
+		for (let x = 0; x < GRID; x++, i++) {
+			const u = x / (GRID - 1), v = y / (GRID - 1);
+			positions.set([u * 10 - 5, Math.sin(u * 20) * Math.cos(v * 20) * 0.3, v * 10 - 5], i * 3);
+			normals.set([0, 1, 0], i * 3);
+			uvs.set([u, v], i * 2);
+		}
+	}
+	const indices = new Uint32Array((GRID - 1) * (GRID - 1) * 6);
+	for (let y = 0, k = 0; y < GRID - 1; y++) {
+		for (let x = 0; x < GRID - 1; x++) {
+			const a = y * GRID + x, b = a + 1, c = a + GRID, d = c + 1;
+			indices.set([a, c, b, b, c, d], k);
+			k += 6;
+		}
+	}
+	const vao = gl.createVertexArray();
+	gl.bindVertexArray(vao);
+	[[positions, 3], [normals, 3], [uvs, 2]].forEach(([data, size], location) => {
+		gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+		gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
+		gl.enableVertexAttribArray(location);
+		gl.vertexAttribPointer(location, size, gl.FLOAT, false, 0, 0);
+	});
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, gl.createBuffer());
+	gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, indices, gl.STATIC_DRAW);
+
+	const SAMPLERS = ['map', 'normalMap', 'roughnessMap', 'metalnessMap'].slice(0, TEXTURES);
+	const program = gl.createProgram();
+	for (const [type, src] of [[gl.VERTEX_SHADER, `#version 300 es
+		layout(location=0) in vec3 position; layout(location=1) in vec3 normal; layout(location=2) in vec2 uv;
+		uniform mat4 modelMatrix; out vec2 vUv; out vec3 vN;
+		void main(){ vUv = uv; vN = normal; gl_Position = modelMatrix * vec4(position * 0.1, 1.0); }`],
+		[gl.FRAGMENT_SHADER, `#version 300 es
+		precision mediump float; in vec2 vUv; in vec3 vN; out vec4 o;
+		${SAMPLERS.map(s => `uniform sampler2D ${s};`).join('')}
+		void main(){ o = vec4(vN * 0.01, 1.0) ${SAMPLERS.map(s => `+ texture(${s}, vUv)`).join(' ')}; }`]]) {
+		const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(program, s);
+	}
+	gl.linkProgram(program);
+	gl.useProgram(program);
+	SAMPLERS.forEach((name, unit) => {
+		const t = gl.createTexture();
+		gl.activeTexture(gl.TEXTURE0 + unit);
+		gl.bindTexture(gl.TEXTURE_2D, t);
+		gl.texStorage2D(gl.TEXTURE_2D, 1, gl.RGBA8, SIZE, SIZE);
+		const row = new Uint8Array(SIZE * 4 * 64);
+		for (let y0 = 0; y0 < SIZE; y0 += 64) {
+			for (let i = 0; i < row.length; i++)
+				row[i] = (i * (unit + 3) + y0 * 7) & 255;
+			gl.texSubImage2D(gl.TEXTURE_2D, 0, 0, y0, SIZE, 64, gl.RGBA, gl.UNSIGNED_BYTE, row);
+		}
+		gl.uniform1i(gl.getUniformLocation(program, name), unit);
+	});
+	gl.uniformMatrix4fv(gl.getUniformLocation(program, 'modelMatrix'), false, new Float32Array([1,0,0,0, 0,1,0,0, 0,0,1,0, 1,2,3,1]));
+
+	function frame() {
+		gl.viewport(0, 0, 256, 256);
+		gl.clear(gl.COLOR_BUFFER_BIT);
+		gl.drawElements(gl.TRIANGLES, indices.length, gl.UNSIGNED_INT, 0);
+		requestAnimationFrame(frame);
+	}
+	requestAnimationFrame(frame);
+
+	window.sceneReady = true;
+	}
+	</script>
+</body>
+</html>

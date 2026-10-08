@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.1.2
+
+### Performance
+
+- Draw calls are only hooked while a frame is being recorded. The rest of the time the extension costs pages nothing
+  per draw call: a WebGL 2 scene with 3000 draw calls per frame renders as fast as without the extension (the
+  original 0.6 made the same frame about twice as slow).
+
+### Documentation
+
+- README in English and Russian, a detailed description of how the extension works, and a measured comparison with
+  the original WebGL Ripper 0.6 (`docs/`), with the scripts to repeat it (`tests/compare/`).
+- A project website: https://int3re.github.io/WebGLRipper/ (English and Russian).
+
 ## 1.1.1
 
 ### Performance

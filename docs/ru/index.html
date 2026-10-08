@@ -1,0 +1,176 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>WebGL Ripper — скачать 3D-модель с сайта в GLB или OBJ (Chrome и Firefox)</title>
+	<meta name="description" content="Бесплатное расширение для браузера с открытым кодом: извлекает 3D-модели и текстуры со страниц на WebGL — three.js, Babylon.js, PlayCanvas, Unity WebGL — и сохраняет в GLB (glTF) или OBJ для Blender. Превью и выбор объекта кликом.">
+	<meta name="keywords" content="скачать 3D модель с сайта, извлечь 3D модель, рипер 3D моделей, WebGL ripper, экспорт three.js, Unity WebGL, GLB, glTF, OBJ, Blender, расширение Chrome, дополнение Firefox">
+	<link rel="canonical" href="https://int3re.github.io/WebGLRipper/ru/">
+	<link rel="alternate" hreflang="en" href="https://int3re.github.io/WebGLRipper/">
+	<link rel="alternate" hreflang="ru" href="https://int3re.github.io/WebGLRipper/ru/">
+	<link rel="alternate" hreflang="x-default" href="https://int3re.github.io/WebGLRipper/">
+	<meta property="og:type" content="website">
+	<meta property="og:site_name" content="WebGL Ripper">
+	<meta property="og:title" content="WebGL Ripper — скачать 3D-модель с сайта">
+	<meta property="og:description" content="Расширение для браузера: сохраняет 3D-модели и текстуры со страниц на WebGL в GLB или OBJ, с 3D-превью и выбором объекта кликом.">
+	<meta property="og:url" content="https://int3re.github.io/WebGLRipper/ru/">
+	<meta property="og:image" content="https://int3re.github.io/WebGLRipper/images/preview.png">
+	<meta property="og:image:width" content="1280">
+	<meta property="og:image:height" content="760">
+	<meta property="og:locale" content="ru_RU">
+	<meta property="og:locale:alternate" content="en_US">
+	<meta name="twitter:card" content="summary_large_image">
+	<meta name="twitter:title" content="WebGL Ripper — скачать 3D-модель с сайта">
+	<meta name="twitter:description" content="Сохраняйте 3D-модели и текстуры со страниц на WebGL в GLB или OBJ. Chrome и Firefox, бесплатно и с открытым кодом.">
+	<meta name="twitter:image" content="https://int3re.github.io/WebGLRipper/images/preview.png">
+	<meta name="theme-color" content="#0f1115">
+	<link rel="icon" type="image/png" href="../assets/icon.png">
+	<link rel="stylesheet" href="../assets/site.css">
+	<script type="application/ld+json">
+	{
+		"@context": "https://schema.org",
+		"@type": "SoftwareApplication",
+		"name": "WebGL Ripper",
+		"description": "Расширение для браузера, которое извлекает 3D-модели и текстуры со страниц на WebGL и сохраняет их в GLB (glTF 2.0) или OBJ + MTL + PNG.",
+		"applicationCategory": "MultimediaApplication",
+		"applicationSubCategory": "Расширение для браузера",
+		"operatingSystem": "Chrome 121+, Edge, Brave, Opera, Firefox 128+",
+		"softwareVersion": "1.1.2",
+		"license": "https://opensource.org/licenses/MIT",
+		"isAccessibleForFree": true,
+		"offers": { "@type": "Offer", "price": "0", "priceCurrency": "RUB" },
+		"url": "https://int3re.github.io/WebGLRipper/ru/",
+		"downloadUrl": "https://github.com/int3re/WebGLRipper/releases/latest",
+		"codeRepository": "https://github.com/int3re/WebGLRipper",
+		"screenshot": "https://int3re.github.io/WebGLRipper/images/preview.png",
+		"inLanguage": ["ru", "en"]
+	}
+	</script>
+	<script type="application/ld+json">
+	{
+		"@context": "https://schema.org",
+		"@type": "FAQPage",
+		"mainEntity": [
+			{ "@type": "Question", "name": "Как скачать 3D-модель с сайта?",
+			  "acceptedAnswer": { "@type": "Answer", "text": "Установите WebGL Ripper, откройте страницу с 3D-моделью, дождитесь, пока она появится, и нажмите Insert. На странице откроется 3D-превью: выберите меши и нажмите Download — получите файл GLB или OBJ." } },
+			{ "@type": "Question", "name": "На каких сайтах работает WebGL Ripper?",
+			  "acceptedAnswer": { "@type": "Answer", "text": "На любых страницах, которые рисуют через WebGL в браузере: просмотрщики на three.js, Babylon.js и PlayCanvas, игры на Unity WebGL и Godot, конфигураторы товаров и 3D-галереи. Не работает там, где картинка рендерится на сервере и приходит видеопотоком." } },
+			{ "@type": "Question", "name": "Можно ли открыть результат в Blender?",
+			  "acceptedAnswer": { "@type": "Answer", "text": "Да. GLB импортируется через File → Import → glTF 2.0, OBJ — через File → Import → Wavefront (.obj). Текстуры, цвета материалов и нормали сохраняются." } },
+			{ "@type": "Question", "name": "Расширение куда-то отправляет данные?",
+			  "acceptedAnswer": { "@type": "Answer", "text": "Нет. WebGL Ripper не делает ни одного сетевого запроса, всё происходит в вашем браузере." } }
+		]
+	}
+	</script>
+</head>
+<body>
+	<header class="top">
+		<div class="wrap">
+			<a class="brand" href="./"><img src="../assets/icon.png" alt="" width="28" height="28">WebGL Ripper</a>
+			<nav class="links" aria-label="Сайт">
+				<a href="../how-it-works.ru.html">Как устроено</a>
+				<a href="../comparison.ru.html">Сравнение</a>
+				<a href="https://github.com/int3re/WebGLRipper/blob/main/README.ru.md">GitHub</a>
+				<a href="../" hreflang="en" lang="en">English</a>
+			</nav>
+		</div>
+	</header>
+
+	<main>
+		<div class="hero">
+			<div class="wrap">
+				<h1>Скачайте 3D-модель с любого сайта</h1>
+				<p class="lead">WebGL Ripper — бесплатное расширение для браузера. Оно перехватывает 3D-модели и текстуры,
+					которые рисует WebGL-страница, и сохраняет их в <strong>GLB (glTF 2.0)</strong> или
+					<strong>OBJ</strong> — сразу для Blender, Unity, Unreal или Godot.</p>
+				<div class="actions">
+					<a class="button primary" href="https://github.com/int3re/WebGLRipper/releases/latest">Скачать для Chrome и Firefox</a>
+					<a class="button" href="https://github.com/int3re/WebGLRipper">Исходный код на GitHub</a>
+				</div>
+				<p class="note">Версия 1.1.2 · лицензия MIT · Chrome, Edge, Brave, Opera 121+ · Firefox 128+</p>
+				<img class="shot" src="../images/preview.png" width="1280" height="760"
+					alt="Превью WebGL Ripper: захваченная сцена three.js в 3D, список мешей и кнопки форматов GLB / OBJ">
+			</div>
+		</div>
+
+		<section id="features">
+			<div class="wrap">
+				<h2>Что умеет</h2>
+				<div class="grid">
+					<div class="card"><h3>GLB или OBJ</h3><p>Один .glb со встроенными текстурами и PBR-материалами или OBJ + MTL + PNG в ZIP — или оба сразу.</p></div>
+					<div class="card"><h3>Превью перед скачиванием</h3><p>Покрутите захваченную сцену прямо на странице и выберите нужные меши.</p></div>
+					<div class="card"><h3>Выбор кликом</h3><p>Shift+Insert, клик по объекту — и сохранится только он, даже сквозь пост-обработку.</p></div>
+					<div class="card"><h3>Готово к импорту</h3><p>Меши на своих местах, модель стоит на «полу», вершины сварены, есть нормали и цвета материалов.</p></div>
+					<div class="card"><h3>Чистый результат</h3><p>Проходы теней и глубины, оси-гизмо и квадраты пост-обработки отбрасываются.</p></div>
+					<div class="card"><h3>Точные текстуры</h3><p>Настоящий размер, байт в байт, включая сжатые, float и прозрачные текстуры.</p></div>
+					<div class="card"><h3>Работает с вашим движком</h3><p>three.js, Babylon.js, PlayCanvas, Unity WebGL, Godot, Emscripten, обычный WebGL 1 и 2.</p></div>
+					<div class="card"><h3>Приватно и легко</h3><p>Никаких сетевых запросов. Никакой нагрузки на отрисовку, пока вы не нажали клавишу.</p></div>
+				</div>
+			</div>
+		</section>
+
+		<section id="pick">
+			<div class="wrap">
+				<h2>Сохранить один объект</h2>
+				<div class="pair">
+					<figure><img src="../images/pick-hint.png" width="1280" height="760" loading="lazy" alt="Режим выбора: подсказка просит кликнуть объект"><figcaption>Нажмите Shift+Insert и кликните объект.</figcaption></figure>
+					<figure><img src="../images/pick-preview.png" width="1280" height="760" loading="lazy" alt="Превью, в котором выбран только кликнутый тор-узел"><figcaption>Выбран только кликнутый меш, остальные остаются полупрозрачными.</figcaption></figure>
+				</div>
+			</div>
+		</section>
+
+		<section id="comparison">
+			<div class="wrap">
+				<h2>Быстрее и точнее оригинала</h2>
+				<p class="sub">Замеры против WebGL Ripper 0.6 от Rilshrink, обе версии в одном Chrome. <a href="../comparison.ru.html">Методика и все цифры</a>.</p>
+				<div class="table-scroll">
+					<table>
+						<thead><tr><th>Тестовая страница</th><th>Оригинал 0.6</th><th>WebGL Ripper 1.1.2</th></tr></thead>
+						<tbody>
+							<tr><td>Сцена three.js с тенями и пост-обработкой</td><td class="bad">все меши в начале координат, без нормалей, чужая текстура в 16 раз больше</td><td class="good">на местах, нормали, цвета, правильная текстура — 0,17 с</td></tr>
+							<tr><td>3000 вызовов отрисовки</td><td class="bad">за 3 мин файла нет, +1,3 ГБ памяти</td><td class="good">0,28 с, +42 МБ</td></tr>
+							<tr><td>250 тыс. вершин, две 4K-текстуры</td><td class="bad">3,9 с, страница зависла на 1,5 с, ZIP 60 МБ</td><td class="good">1,6 с (GLB), зависание меньше 0,2 с, ZIP 5,6 МБ</td></tr>
+							<tr><td>Память в стиле Unity / Emscripten</td><td class="bad">мусор</td><td class="good">точно</td></tr>
+							<tr><td>WebGL создан во время загрузки страницы</td><td class="bad">пропущен</td><td class="good">перехвачен</td></tr>
+							<tr><td>Время кадра, 3000 вызовов, без захвата</td><td class="bad">≈ в 2 раза медленнее</td><td class="good">без заметной разницы</td></tr>
+						</tbody>
+					</table>
+				</div>
+			</div>
+		</section>
+
+		<section id="install">
+			<div class="wrap">
+				<h2>Установка и использование</h2>
+				<ol class="steps">
+					<li>Скачайте <code>webglripper-…-chrome.zip</code> или <code>…-firefox.zip</code> из <a href="https://github.com/int3re/WebGLRipper/releases/latest">последнего релиза</a>.</li>
+					<li><strong>Chrome / Edge / Brave / Opera:</strong> распакуйте, откройте <code>chrome://extensions</code>, включите режим разработчика, нажмите <em>Загрузить распакованное расширение</em> и выберите папку. <strong>Firefox:</strong> <code>about:debugging#/runtime/this-firefox</code> → <em>Загрузить временное дополнение…</em> → zip-файл.</li>
+					<li>Откройте страницу с 3D-моделью и нажмите <kbd>Insert</kbd>. Выберите меши в превью и нажмите <em>Download</em>.</li>
+					<li>Импортируйте файл в Blender: <em>File → Import → glTF 2.0</em> или <em>Wavefront (.obj)</em>.</li>
+				</ol>
+				<p class="note">WebGL Ripper не опубликован в Chrome Web Store и других магазинах; копии оттуда — не из этого проекта.</p>
+			</div>
+		</section>
+
+		<section id="faq">
+			<div class="wrap">
+				<h2>Вопросы</h2>
+				<details><summary>Как скачать 3D-модель с сайта?</summary><p>Установите WebGL Ripper, откройте страницу, дождитесь появления модели и нажмите Insert. На странице откроется 3D-превью: выберите меши и нажмите Download — получите GLB или OBJ.</p></details>
+				<details><summary>На каких сайтах работает?</summary><p>На любых страницах с WebGL: просмотрщики на three.js, Babylon.js и PlayCanvas, игры на Unity WebGL и Godot, конфигураторы товаров, 3D-галереи. Не на страницах, где картинка приходит видеопотоком с сервера или рисуется из Web Worker.</p></details>
+				<details><summary>Почему персонаж в T-позе?</summary><p>Персонажи, анимированные на видеокарте, сохраняются в исходной позе: вершины двигает вершинный шейдер, а расширение сохраняет то, что загрузила страница.</p></details>
+				<details><summary>Как это работает?</summary><p>Расширение запускается внутри страницы раньше её скриптов, записывает вызовы отрисовки одного кадра — геометрию, текстуры и матрицы, — очищает их и записывает GLB или OBJ. <a href="../how-it-works.ru.html">Подробное описание</a>.</p></details>
+				<details><summary>Расширение отправляет мои данные?</summary><p>Нет. Оно не делает ни одного сетевого запроса.</p></details>
+				<details><summary>Можно ли так делать?</summary><p>Модели и текстуры принадлежат их авторам. Сохраняйте только то, что вам разрешено использовать: свои работы, ресурсы под свободной лицензией или контент с разрешения, — и соблюдайте условия сайтов.</p></details>
+			</div>
+		</section>
+	</main>
+
+	<footer>
+		<div class="wrap">
+			<span>WebGL Ripper · лицензия MIT · основано на <a href="https://github.com/Rilshrink/WebGLRipper">WebGLRipper</a> от Rilshrink</span>
+			<span><a href="https://github.com/int3re/WebGLRipper">GitHub</a> · <a href="https://github.com/int3re/WebGLRipper/blob/main/CHANGELOG.md">Изменения</a> · <a href="https://github.com/int3re/WebGLRipper/issues">Issues</a></span>
+		</div>
+	</footer>
+</body>
+</html>

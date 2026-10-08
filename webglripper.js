@@ -437,26 +437,62 @@ const CAPTURE_WEBGL2_HOOKS = {
 	}
 };
 
+const onDrawArrays = (gl, a) => { if (session) session.onDraw(gl, a[0], a[1], a[2], -1, 0); };
+const onDrawElements = (gl, a) => { if (session) session.onDraw(gl, a[0], 0, a[1], a[2], a[3]); };
+// WebGL 2 buffers are read back from the GPU during a capture; these only drop stale cached copies.
+const onBufferChange = (gl, a) => { if (session) session.invalidateBuffer(gl, a[0]); };
+
+/* Draw calls, and everything else that only matters while a frame is recorded, are hooked just for that frame: pages
+ * don't pay for these hooks the rest of the time. Pages look the methods up on the prototype when they call them, so
+ * hooks installed between two frames see the whole next frame. */
 function installCaptureHooks(pick) {
 	const restore = [];
+	const hook = (proto, name, after) => restore.push(hookMethod(proto, name, after));
 	for (const proto of [WebGL1.prototype, NATIVE_2 ? WebGL2.prototype : null]) {
+		if (!proto)
+			continue;
+		hook(proto, 'drawArrays', onDrawArrays);
+		hook(proto, 'drawElements', onDrawElements);
 		for (const name in CAPTURE_UNIFORM_HOOKS)
-			restore.push(hookMethod(proto, name, CAPTURE_UNIFORM_HOOKS[name]));
+			hook(proto, name, CAPTURE_UNIFORM_HOOKS[name]);
 		if (pick) {
 			// a cleared target gives the pixel under the cursor its starting value
-			restore.push(hookMethod(proto, 'clear', (gl) => {
+			hook(proto, 'clear', (gl) => {
 				if (session && session.pick && session.pick.gl === gl)
 					session.context(gl).probe(null);
-			}));
+			});
 		}
 	}
 	if (NATIVE_2) {
+		const P2 = WebGL2.prototype;
+		hook(P2, 'drawArraysInstanced', onDrawArrays);
+		hook(P2, 'drawElementsInstanced', onDrawElements);
+		hook(P2, 'drawRangeElements', (gl, a) => { if (session) session.onDraw(gl, a[0], 0, a[3], a[4], a[5]); });
+		hook(P2, 'bufferData', onBufferChange);
+		hook(P2, 'bufferSubData', onBufferChange);
+		hook(P2, 'copyBufferSubData', (gl, a) => { if (session) session.invalidateBuffer(gl, a[1]); });
 		for (const name in CAPTURE_WEBGL2_HOOKS)
-			restore.push(hookMethod(WebGL2.prototype, name, CAPTURE_WEBGL2_HOOKS[name]));
+			hook(P2, name, CAPTURE_WEBGL2_HOOKS[name]);
 	}
-	if (typeof window.ANGLEInstancedArrays === 'function') {
-		restore.push(hookMethod(ANGLEInstancedArrays.prototype, 'vertexAttribDivisorANGLE',
-			(ext, a) => recordDivisor(extensionOwner.get(ext), a[0], a[1])));
+	const Instanced = window.ANGLEInstancedArrays;
+	if (typeof Instanced === 'function') {
+		hook(Instanced.prototype, 'vertexAttribDivisorANGLE', (ext, a) => recordDivisor(extensionOwner.get(ext), a[0], a[1]));
+		hook(Instanced.prototype, 'drawArraysInstancedANGLE', (ext, a) => {
+			const gl = session && extensionOwner.get(ext);
+			if (gl) session.onDraw(gl, a[0], a[1], a[2], -1, 0);
+		});
+		hook(Instanced.prototype, 'drawElementsInstancedANGLE', (ext, a) => {
+			const gl = session && extensionOwner.get(ext);
+			if (gl) session.onDraw(gl, a[0], 0, a[1], a[2], a[3]);
+		});
+	}
+	const MultiDraw = window.WebGLMultiDraw;
+	if (typeof MultiDraw === 'function') {
+		const P = MultiDraw.prototype;
+		hook(P, 'multiDrawArraysWEBGL', (ext, a) => onMultiDrawArrays(ext, a[0], a[1], a[2], a[3], a[4], a[5]));
+		hook(P, 'multiDrawArraysInstancedWEBGL', (ext, a) => onMultiDrawArrays(ext, a[0], a[1], a[2], a[3], a[4], a[7]));
+		hook(P, 'multiDrawElementsWEBGL', (ext, a) => onMultiDrawElements(ext, a[0], a[1], a[2], a[3], a[4], a[5], a[6]));
+		hook(P, 'multiDrawElementsInstancedWEBGL', (ext, a) => onMultiDrawElements(ext, a[0], a[1], a[2], a[3], a[4], a[5], a[8]));
 	}
 	return () => restore.forEach(fn => fn());
 }
@@ -491,8 +527,6 @@ function installHooks() {
 	for (const proto of [P1, P2]) {
 		if (!proto)
 			continue;
-		hookMethod(proto, 'drawArrays', (gl, a) => { if (session) session.onDraw(gl, a[0], a[1], a[2], -1, 0); });
-		hookMethod(proto, 'drawElements', (gl, a) => { if (session) session.onDraw(gl, a[0], 0, a[1], a[2], a[3]); });
 		hookMethod(proto, 'texImage2D', onTexImage2D);
 		hookMethod(proto, 'compressedTexImage2D', (gl, a) => {
 			if (a[0] === GL.TEXTURE_2D && a[1] === 0)
@@ -514,44 +548,16 @@ function installHooks() {
 	}
 
 	if (P2) {
-		hookMethod(P2, 'drawArraysInstanced', (gl, a) => { if (session) session.onDraw(gl, a[0], a[1], a[2], -1, 0); });
-		hookMethod(P2, 'drawElementsInstanced', (gl, a) => { if (session) session.onDraw(gl, a[0], 0, a[1], a[2], a[3]); });
-		hookMethod(P2, 'drawRangeElements', (gl, a) => { if (session) session.onDraw(gl, a[0], 0, a[3], a[4], a[5]); });
 		hookMethod(P2, 'texStorage2D', (gl, a) => {
 			if (a[0] === GL.TEXTURE_2D)
 				trackBoundTexture(gl, { width: a[3], height: a[4], internalFormat: a[2], type: 0, compressed: false });
 		});
-		// WebGL 2 buffers are read back from the GPU during a capture; these only drop stale cached copies.
-		const invalidate = (gl, a) => { if (session) session.invalidateBuffer(gl, a[0]); };
-		hookMethod(P2, 'bufferData', invalidate);
-		hookMethod(P2, 'bufferSubData', invalidate);
-		hookMethod(P2, 'copyBufferSubData', (gl, a) => { if (session) session.invalidateBuffer(gl, a[1]); });
 	}
 
+	// WebGL 1 can't read buffers back, so their contents are copied as they are uploaded
 	hookMethod(P1, 'bufferData', (gl, a) => shadowBufferData(gl, a[0], a[1]));
 	hookMethod(P1, 'bufferSubData', (gl, a) => shadowBufferSubData(gl, a[0], a[1], a[2]));
 	hookMethod(P1, 'deleteBuffer', (gl, a) => { if (a[0]) bufferShadows.delete(a[0]); });
-
-	const Instanced = window.ANGLEInstancedArrays;
-	if (typeof Instanced === 'function') {
-		hookMethod(Instanced.prototype, 'drawArraysInstancedANGLE', (ext, a) => {
-			const gl = session && extensionOwner.get(ext);
-			if (gl) session.onDraw(gl, a[0], a[1], a[2], -1, 0);
-		});
-		hookMethod(Instanced.prototype, 'drawElementsInstancedANGLE', (ext, a) => {
-			const gl = session && extensionOwner.get(ext);
-			if (gl) session.onDraw(gl, a[0], 0, a[1], a[2], a[3]);
-		});
-	}
-
-	const MultiDraw = window.WebGLMultiDraw;
-	if (typeof MultiDraw === 'function') {
-		const P = MultiDraw.prototype;
-		hookMethod(P, 'multiDrawArraysWEBGL', (ext, a) => onMultiDrawArrays(ext, a[0], a[1], a[2], a[3], a[4], a[5]));
-		hookMethod(P, 'multiDrawArraysInstancedWEBGL', (ext, a) => onMultiDrawArrays(ext, a[0], a[1], a[2], a[3], a[4], a[7]));
-		hookMethod(P, 'multiDrawElementsWEBGL', (ext, a) => onMultiDrawElements(ext, a[0], a[1], a[2], a[3], a[4], a[5], a[6]));
-		hookMethod(P, 'multiDrawElementsInstancedWEBGL', (ext, a) => onMultiDrawElements(ext, a[0], a[1], a[2], a[3], a[4], a[5], a[8]));
-	}
 }
 
 /* ------------------------------------------------------------------------------------------------------------

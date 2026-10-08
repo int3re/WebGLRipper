@@ -1,0 +1,81 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Comparison: three.js scene</title>
+	<!-- A typical three.js page: textured and colored meshes, shadows (every mesh is drawn twice), post-processing and an
+	     axis gizmo. Expected: a textured cube at (-2, 0.7, 0), a torus knot at (0.4, 1.2, 0), an icosahedron at
+	     (2.6, 0.8, -0.5) and a 12 x 12 floor at the origin. -->
+	<script type="importmap">
+		{ "imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+		} }
+	</script>
+	<style>
+		body { margin: 0; background: #111; font: 14px system-ui, sans-serif; }
+		.bar { position: fixed; top: 12px; left: 12px; display: flex; gap: 8px; }
+		button { font: inherit; padding: 6px 12px; }
+	</style>
+</head>
+<body>
+		<script type="module">
+		import * as THREE from 'three';
+		import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+		import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+		import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+		import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
+
+		const renderer = new THREE.WebGLRenderer({ antialias: true });
+		renderer.setSize(innerWidth, innerHeight);
+		renderer.shadowMap.enabled = true;
+		document.body.prepend(renderer.domElement);
+		const scene = new THREE.Scene();
+		scene.background = new THREE.Color(0x202228);
+		const camera = new THREE.PerspectiveCamera(45, innerWidth / innerHeight, 0.1, 100);
+		camera.position.set(6, 5, 9);
+		camera.lookAt(0, 0.8, 0);
+		const light = new THREE.DirectionalLight(0xffffff, 2.5);
+		light.position.set(4, 8, 5);
+		light.castShadow = true;
+		scene.add(light, new THREE.AmbientLight(0xffffff, 0.4));
+
+		const canvas = document.createElement('canvas');
+		canvas.width = canvas.height = 256;
+		const c = canvas.getContext('2d');
+		for (let y = 0; y < 8; y++)
+			for (let x = 0; x < 8; x++) {
+				c.fillStyle = (x + y) % 2 ? '#e0a040' : '#3060c0';
+				c.fillRect(x * 32, y * 32, 32, 32);
+			}
+		const checker = new THREE.CanvasTexture(canvas);
+		checker.colorSpace = THREE.SRGBColorSpace;
+
+		const add = (mesh, x, y, z) => {
+			mesh.position.set(x, y, z);
+			mesh.castShadow = mesh.receiveShadow = true;
+			scene.add(mesh);
+			return mesh;
+		};
+		add(new THREE.Mesh(new THREE.BoxGeometry(1.4, 1.4, 1.4), new THREE.MeshStandardMaterial({ map: checker })), -2, 0.7, 0);
+		add(new THREE.Mesh(new THREE.TorusKnotGeometry(0.6, 0.22, 160, 24), new THREE.MeshStandardMaterial({ color: 0xd04060, roughness: 0.3 })), 0.4, 1.2, 0);
+		add(new THREE.Mesh(new THREE.IcosahedronGeometry(0.8, 1), new THREE.MeshStandardMaterial({ color: 0x40b080, flatShading: true })), 2.6, 0.8, -0.5);
+		const ground = add(new THREE.Mesh(new THREE.PlaneGeometry(12, 12), new THREE.MeshStandardMaterial({ color: 0x777b85 })), 0, 0, 0);
+		ground.rotation.x = -Math.PI / 2;
+
+		const composer = new EffectComposer(renderer);
+		composer.addPass(new RenderPass(scene, camera));
+		composer.addPass(new OutputPass());
+		const gizmo = new ViewHelper(camera, renderer.domElement);
+		renderer.setAnimationLoop((time) => {
+			scene.children[3].rotation.y = time / 2000;
+			composer.render();
+			renderer.autoClear = false;
+			gizmo.render(renderer);
+			renderer.autoClear = true;
+		});
+
+		window.sceneReady = true;
+	</script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>Comparison: Emscripten heap, created after loading</title></head>
+<body style="margin:0"><canvas id="c" width="256" height="256"></canvas>
+<script>
+window.addEventListener('load', () => setTimeout(() => {
+// Like Unity/Emscripten: every upload is a view into one big heap, which is reused right after the call.
+const gl = document.getElementById('c').getContext('webgl');
+const HEAP8 = new Uint8Array(1 << 20), HEAPF32 = new Float32Array(HEAP8.buffer), HEAPU16 = new Uint16Array(HEAP8.buffer);
+const quad = [1, 2, 3, 4, 2, 3, 4, 5, 3, 1, 5, 3];
+HEAPF32.set(quad, 4000);
+const vbo = gl.createBuffer();
+gl.bindBuffer(gl.ARRAY_BUFFER, vbo);
+gl.bufferData(gl.ARRAY_BUFFER, HEAP8.subarray(16000, 16000 + quad.length * 4), gl.STATIC_DRAW);
+HEAPU16.set([0, 1, 2, 0, 2, 3], 20000);
+const ibo = gl.createBuffer();
+gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, HEAP8.subarray(40000, 40012), gl.STATIC_DRAW);
+HEAP8.fill(0x7F, 0, 65536); // the heap is reused for something else
+const p = gl.createProgram();
+for (const [t, src] of [[gl.VERTEX_SHADER, 'attribute vec3 position; void main(){ gl_Position = vec4(position * 0.1 - 0.3, 1.0); }'],
+	[gl.FRAGMENT_SHADER, 'precision mediump float; void main(){ gl_FragColor = vec4(1.0, 0.5, 0.2, 1.0); }']]) {
+	const s = gl.createShader(t); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s);
+}
+gl.bindAttribLocation(p, 0, 'position'); gl.linkProgram(p);
+(function frame() {
+	gl.clearColor(0.1, 0.1, 0.1, 1); gl.clear(gl.COLOR_BUFFER_BIT);
+	gl.useProgram(p);
+	gl.bindBuffer(gl.ARRAY_BUFFER, vbo); gl.enableVertexAttribArray(0); gl.vertexAttribPointer(0, 3, gl.FLOAT, false, 0, 0);
+	gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, ibo);
+	gl.drawElements(gl.TRIANGLES, 6, gl.UNSIGNED_SHORT, 0);
+	requestAnimationFrame(frame);
+})();
+window.sceneReady = true;
+}, 500));
+</script></body></html>

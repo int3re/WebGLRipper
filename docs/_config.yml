@@ -1,0 +1,21 @@
+# GitHub Pages site of WebGL Ripper (published from the docs/ folder)
+title: WebGL Ripper
+description: Browser extension that extracts 3D models and textures from WebGL websites and saves them as GLB (glTF 2.0) or OBJ — for Chrome and Firefox.
+url: https://int3re.github.io
+baseurl: /WebGLRipper
+lang: en
+theme: jekyll-theme-primer
+plugins:
+  - jekyll-sitemap
+  - jekyll-seo-tag
+  - jekyll-relative-links
+  - jekyll-optional-front-matter
+relative_links:
+  enabled: true
+twitter:
+  card: summary_large_image
+defaults:
+  - scope:
+      path: ""
+    values:
+      image: /images/preview.png
