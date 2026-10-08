@@ -51,12 +51,14 @@ h1 { margin: 0; font-size: 15px; font-weight: 600; }
 .list { flex: 1; overflow: auto; padding: 0 8px; }
 .item { display: flex; align-items: center; gap: 10px; padding: 6px 8px; border-radius: 8px; cursor: pointer; user-select: none; }
 .item:hover, .item.hover { background: #2a2d33; }
-.item.off .name, .item.off .tris { color: #80868b; }
-.item canvas { width: 34px; height: 34px; border-radius: 6px; flex: none; background: #3c4048; }
-.item .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item.off .text { color: #80868b; }
+.item.off canvas { opacity: .45; }
+.item canvas { width: 40px; height: 40px; border-radius: 6px; flex: none; background: #2a2d33; }
+.item .text { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.item .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.item .info { color: #9aa0a6; font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .item .badge { color: #13161a; background: #fdd663; border-radius: 4px; padding: 0 5px; font-size: 11px; margin-left: 6px; }
 .item .badge.muted { color: #c4c9d2; background: #3c4048; }
-.item .tris { color: #9aa0a6; font-size: 12px; white-space: nowrap; }
 input[type="checkbox"] { width: 16px; height: 16px; accent-color: #8ab4f8; flex: none; margin: 0; }
 .section { padding: 12px 16px 0; color: #9aa0a6; font-size: 12px; }
 .format { display: flex; gap: 4px; padding: 6px 16px 0; }
@@ -109,6 +111,20 @@ function createHost(extraClass) {
 }
 
 const formatCount = (n) => n.toLocaleString('en-US').replace(/,/g, ' ');
+const formatLength = (n) => (n >= 100 ? String(Math.round(n)) : String(Number(n.toPrecision(3))));
+
+/* The second line of a list row: triangles, base color texture, size. */
+function describeMesh(mesh, entry) {
+	const parts = [`${formatCount(mesh.triangleCount)} tris`];
+	if (mesh.textureWidth)
+		parts.push(`${mesh.textureWidth}×${mesh.textureHeight} texture`);
+	if (entry && entry.lo[0] <= entry.hi[0]) {
+		const size = [0, 1, 2].map(k => entry.hi[k] - entry.lo[k]);
+		const largest = Math.max(...size);
+		parts.push(size.map(n => formatLength(n < largest * 1e-4 ? 0 : n)).join(' × ')); // a flat plane is 0 thick
+	}
+	return parts.join(' · ');
+}
 
 /* ---- pick mode hint ---- */
 
@@ -278,8 +294,7 @@ class View {
 			}
 		}
 		const entry = { index, vao, buffers, count: mesh.triangles.length, texture: null, bitmap: null, lo, hi, source: mesh };
-		if (mesh.texture)
-			this.loadTexture(entry, mesh);
+		entry.loading = mesh.texture ? this.loadTexture(entry, mesh) : null;
 		return entry;
 	}
 
@@ -538,6 +553,76 @@ class View {
 		return (pixel[0] | pixel[1] << 8 | pixel[2] << 16) - 1;
 	}
 
+	/* Renders one mesh on its own, from the front right and a little above, at twice the size (drawn smaller it comes
+	 * out smooth). Returns a 2D canvas to copy from right away, or null. */
+	thumbnailCanvas(index, size) {
+		const gl = this.gl, mesh = this.meshes[index];
+		if (!gl || !mesh || !(mesh.lo[0] <= mesh.hi[0]))
+			return null;
+		const pixels = size * 2;
+		if (!this.thumbTarget || this.thumbTarget.pixels !== pixels) {
+			this.disposeThumbTarget();
+			const framebuffer = gl.createFramebuffer();
+			const color = gl.createRenderbuffer();
+			gl.bindRenderbuffer(gl.RENDERBUFFER, color);
+			gl.renderbufferStorage(gl.RENDERBUFFER, gl.RGBA8, pixels, pixels);
+			const depth = gl.createRenderbuffer();
+			gl.bindRenderbuffer(gl.RENDERBUFFER, depth);
+			gl.renderbufferStorage(gl.RENDERBUFFER, gl.DEPTH_COMPONENT24, pixels, pixels);
+			gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+			gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.RENDERBUFFER, color);
+			gl.framebufferRenderbuffer(gl.FRAMEBUFFER, gl.DEPTH_ATTACHMENT, gl.RENDERBUFFER, depth);
+			const canvas = element('canvas');
+			canvas.width = canvas.height = pixels;
+			this.thumbTarget = { framebuffer, color, depth, pixels, canvas, context: canvas.getContext('2d'), image: new ImageData(pixels, pixels) };
+		}
+		const target = this.thumbTarget;
+		if (!target.context)
+			return null;
+		const center = [0, 1, 2].map(k => (mesh.lo[k] + mesh.hi[k]) / 2);
+		const radius = Math.max(Math.hypot(mesh.hi[0] - mesh.lo[0], mesh.hi[1] - mesh.lo[1], mesh.hi[2] - mesh.lo[2]) / 2, 1e-6);
+		const fov = Math.PI / 6, yaw = 0.65, pitch = 0.4;
+		const distance = radius / Math.sin(fov / 2) * 1.04;
+		const eye = [center[0] + distance * Math.cos(pitch) * Math.sin(yaw), center[1] + distance * Math.sin(pitch),
+			center[2] + distance * Math.cos(pitch) * Math.cos(yaw)];
+		const viewProjection = multiply(perspective(fov, 1, distance / 100, distance * 3), lookAt(eye, center));
+		gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+		gl.viewport(0, 0, pixels, pixels);
+		gl.clearColor(0, 0, 0, 0);
+		gl.clear(gl.COLOR_BUFFER_BIT | gl.DEPTH_BUFFER_BIT);
+		gl.useProgram(this.program);
+		const u = this.uniforms;
+		gl.uniformMatrix4fv(u.viewProjection, false, viewProjection);
+		gl.uniform3f(u.eye, eye[0], eye[1], eye[2]);
+		gl.uniform1f(u.flipV, this.data.flipV ? 1 : 0);
+		gl.uniform1i(u.map, 0);
+		gl.uniform1f(u.idPass, 0);
+		gl.enable(gl.DEPTH_TEST);
+		gl.disable(gl.BLEND);
+		gl.disable(gl.CULL_FACE);
+		gl.depthMask(true);
+		this.drawMesh(mesh, 1, 0);
+		const rows = new Uint8Array(pixels * pixels * 4);
+		gl.readPixels(0, 0, pixels, pixels, gl.RGBA, gl.UNSIGNED_BYTE, rows);
+		gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+		gl.bindVertexArray(null);
+		const stride = pixels * 4, data = target.image.data;
+		for (let y = 0; y < pixels; y++)
+			data.set(rows.subarray((pixels - 1 - y) * stride, (pixels - y) * stride), y * stride);
+		target.context.putImageData(target.image, 0, 0);
+		return target.canvas;
+	}
+
+	disposeThumbTarget() {
+		if (!this.thumbTarget)
+			return;
+		const gl = this.gl;
+		gl.deleteFramebuffer(this.thumbTarget.framebuffer);
+		gl.deleteRenderbuffer(this.thumbTarget.color);
+		gl.deleteRenderbuffer(this.thumbTarget.depth);
+		this.thumbTarget = null;
+	}
+
 	disposePickTarget() {
 		if (!this.pickTarget)
 			return;
@@ -554,6 +639,7 @@ class View {
 		if (!gl)
 			return;
 		this.disposePickTarget();
+		this.disposeThumbTarget();
 		for (const mesh of this.meshes) {
 			gl.deleteVertexArray(mesh.vao);
 			for (const buffer of mesh.buffers)
@@ -578,12 +664,20 @@ class View {
 
 const srgb = (c) => Math.pow(Math.min(Math.max(c, 0), 1), 1 / 2.2);
 
-function drawThumbnail(canvas, view, entry) {
+const THUMBNAIL_SIZE = 40; // CSS pixels
+
+function drawThumbnail(canvas, view, entry, render) {
 	const ratio = Math.min(window.devicePixelRatio || 1, 2);
-	canvas.width = canvas.height = Math.round(34 * ratio);
+	const size = Math.round(THUMBNAIL_SIZE * ratio);
+	canvas.width = canvas.height = size;
 	const context = canvas.getContext('2d');
 	if (!context)
 		return;
+	const rendered = render && entry ? view.thumbnailCanvas(entry.index, size) : null;
+	if (rendered) {
+		context.drawImage(rendered, 0, 0, size, size);
+		return;
+	}
 	if (entry && entry.bitmap) {
 		context.drawImage(entry.bitmap, 0, 0, canvas.width, canvas.height);
 		return;
@@ -675,21 +769,63 @@ function open(data) {
 			refresh();
 		};
 
+		// Rendered thumbnails are drawn a few at a time, for the rows that are (nearly) on screen
+		const queue = new Set();
+		let pumping = false;
+		const pump = () => {
+			pumping = false;
+			if (view.disposed)
+				return;
+			const start = performance.now();
+			for (const index of queue) {
+				queue.delete(index);
+				items[index].rendered = true;
+				drawThumbnail(items[index].thumb, view, view.meshes[index], true);
+				if (performance.now() - start > 8)
+					break;
+			}
+			if (queue.size && !pumping) {
+				pumping = true;
+				native.requestAnimationFrame(pump);
+			}
+		};
+		const wantThumbnail = (index) => {
+			queue.add(index);
+			if (!pumping) {
+				pumping = true;
+				native.requestAnimationFrame(pump);
+			}
+		};
+		const rowObserver = view.gl && window.IntersectionObserver ? new IntersectionObserver((entries) => {
+			for (const entry of entries) {
+				if (!entry.isIntersecting)
+					continue;
+				rowObserver.unobserve(entry.target);
+				wantThumbnail(Number(entry.target.dataset.index));
+			}
+		}, { root: list, rootMargin: '200px 0px' }) : null;
+
 		for (const [index, mesh] of data.meshes.entries()) {
 			const row = element('div', 'item');
+			row.dataset.index = String(index);
 			const checkbox = element('input');
 			checkbox.type = 'checkbox';
 			const thumb = element('canvas');
-			const name = element('span', 'name', mesh.name);
+			const text = element('div', 'text');
+			const name = element('div', 'name', mesh.name);
 			if (mesh.picked)
 				append(name, element('span', 'badge', 'picked'));
 			else if (mesh.background)
 				append(name, element('span', 'badge muted', 'background'));
-			const tris = element('span', 'tris', `${formatCount(mesh.triangleCount)} tris`);
-			append(row, checkbox, thumb, name, tris);
+			append(text, name, element('div', 'info', describeMesh(mesh, view.meshes[index])));
+			append(row, checkbox, thumb, text);
 			append(list, row);
-			items.push({ row, checkbox, thumb });
-			drawThumbnail(thumb, view, view.meshes[index]);
+			items.push({ row, checkbox, thumb, rendered: false });
+			drawThumbnail(thumb, view, view.meshes[index], false);
+			if (rowObserver)
+				rowObserver.observe(row);
+			else if (view.gl)
+				wantThumbnail(index);
 			row.addEventListener('click', (event) => {
 				if (event.target !== checkbox)
 					event.preventDefault();
@@ -698,7 +834,12 @@ function open(data) {
 			row.addEventListener('mouseenter', () => setHover(index));
 			row.addEventListener('mouseleave', () => setHover(-1));
 		}
-		view.onTexture = (entry) => drawThumbnail(items[entry.index].thumb, view, entry);
+		view.onTexture = (entry) => {
+			if (items[entry.index].rendered)
+				wantThumbnail(entry.index);
+			else
+				drawThumbnail(items[entry.index].thumb, view, entry, false);
+		};
 
 		allButton.addEventListener('click', () => { data.meshes.forEach(m => { m.selected = true; }); refresh(); });
 		noneButton.addEventListener('click', () => { data.meshes.forEach(m => { m.selected = false; }); refresh(); });
@@ -790,6 +931,8 @@ function open(data) {
 			apply(native.removeEventListener, window, ['keydown', onKey, true]);
 			if (observer)
 				observer.disconnect();
+			if (rowObserver)
+				rowObserver.disconnect();
 			native.clearTimeout(hoverTimer);
 			view.dispose();
 			host.remove();
@@ -807,5 +950,35 @@ function open(data) {
 	});
 }
 
-registry.registerViewer({ open, hint });
+/* Small rendered pictures of meshes (the popup lists what was saved): data: URLs, in the order given. */
+async function thumbnails(meshes, flipV, size = 64) {
+	if (!meshes.length)
+		return [];
+	const canvas = element('canvas');
+	canvas.width = canvas.height = 1;
+	const view = new View(canvas, { meshes, flipV });
+	try {
+		if (!view.gl)
+			return [];
+		await Promise.all(view.meshes.map(entry => entry.loading));
+		const out = element('canvas');
+		out.width = out.height = size;
+		const context = out.getContext('2d');
+		if (!context)
+			return [];
+		return view.meshes.map((entry, index) => {
+			const rendered = view.thumbnailCanvas(index, size);
+			if (!rendered)
+				return null;
+			context.clearRect(0, 0, size, size);
+			context.drawImage(rendered, 0, 0, size, size);
+			const url = out.toDataURL('image/webp', 0.9);
+			return url.startsWith('data:image/webp') ? url : out.toDataURL('image/png');
+		});
+	} finally {
+		view.dispose();
+	}
+}
+
+registry.registerViewer({ open, hint, thumbnails });
 })();

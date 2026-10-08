@@ -74,7 +74,7 @@ button.primary {
 
 /* ---- popup ---- */
 
-body.popup { width: 320px; padding: 14px; }
+body.popup { width: 340px; padding: 14px; }
 
 .brand { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
 .brand img { border-radius: 50%; }
@@ -113,7 +113,36 @@ body.popup .buttons { display: flex; gap: 8px; }
 body.popup .buttons button { padding: 9px 12px; }
 body.popup button.primary { flex: 1; }
 
-.detail { margin: 8px 0 0; font-size: 12px; color: var(--muted); word-break: break-all; }
+.detail { margin: 8px 0 0; font-size: 12px; color: var(--muted); overflow-wrap: anywhere; }
+
+/* what is on the page */
+.canvases { display: flex; align-items: baseline; gap: 8px; margin: -4px 0 12px; font-size: 12px; color: var(--muted); }
+.canvases .label { flex: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 4px; }
+.chip {
+	border: 1px solid var(--border);
+	border-radius: 999px;
+	padding: 0 7px;
+	font-size: 11.5px;
+	color: var(--text);
+	background: var(--surface);
+	white-space: nowrap;
+}
+
+/* what the last rip saved */
+.last { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border); }
+.last-head { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; margin-bottom: 6px; }
+.last-head h2 { margin: 0; }
+.objects { list-style: none; margin: 0; padding: 0; max-height: 236px; overflow-y: auto; }
+.object { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
+.object .thumb { width: 44px; height: 44px; flex: none; border-radius: 8px; background: var(--surface); object-fit: contain; }
+.object .text { flex: 1; min-width: 0; }
+.object .name, .object .info { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.object .name { font-weight: 500; }
+.object .info { font-size: 12px; color: var(--muted); }
+.object .badge { margin-left: 6px; padding: 0 5px; border-radius: 4px; font-size: 11px; font-weight: 600; color: #13161a; background: var(--busy); }
+.more { margin: 4px 0 0; }
+.left-out { margin: 8px 0 0; font-size: 12px; color: var(--muted); }
 
 .popup footer {
 	display: flex;

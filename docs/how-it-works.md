@@ -184,6 +184,10 @@ can't affect it, and the engine ignores the preview's own WebGL context.
 - Orbit, pan and zoom with the mouse; double-click frames a mesh.
 - Clicking a mesh toggles it: the click is resolved by rendering mesh IDs into an offscreen buffer and reading the
   pixel under the cursor. Excluded meshes stay visible as transparent ghosts.
+- Every row of the list has a thumbnail rendered from the mesh alone, from the front right and a little above, and a
+  line with its triangles, texture size and dimensions. Thumbnails are drawn a few per frame, for the rows on screen.
+- After the download the same renderer makes small thumbnails of the biggest saved meshes for the toolbar popup,
+  which lists them under *Last rip* together with what was left out, next to the canvases found on the page.
 - Each base color texture is decoded once, straight at preview size (at most 2048 px), even when many meshes share it;
   only a 68 px copy is kept for the list. Colors are shown as a glTF importer shows them (linear factors, sRGB
   textures).

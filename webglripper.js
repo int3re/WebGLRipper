@@ -272,11 +272,24 @@ function liveContexts() {
 }
 
 /* Contexts that are attached to the document (detached ones are usually feature-detection probes). */
-function visibleContextCount() {
+function visibleContexts() {
 	return liveContexts().filter(gl => {
 		const canvas = gl.canvas;
 		return !(canvas instanceof HTMLCanvasElement) || canvas.isConnected;
-	}).length;
+	});
+}
+
+function visibleContextCount() {
+	return visibleContexts().length;
+}
+
+/* What the popup shows about the WebGL content of this frame. */
+function canvasList() {
+	return visibleContexts().slice(0, 8).map(gl => ({
+		api: isWebGL2(gl) ? 'WebGL 2' : 'WebGL 1',
+		width: gl.drawingBufferWidth,
+		height: gl.drawingBufferHeight
+	}));
 }
 
 function imageSourceSize(source) {
@@ -984,7 +997,8 @@ class CaptureSession {
 		this.meshes = [];
 		this.exactKeys = new Map();      // draw signature -> mesh, for skipping repeated draws
 		this.drawCount = 0;
-		this.stats = { unsupportedMode: 0, noPosition: 0, duplicates: 0, overlays: 0, unreadable: 0, errors: 0 };
+		this.stats = { unsupportedMode: 0, noPosition: 0, duplicates: 0, overlays: 0, unreadable: 0, errors: 0,
+			gizmos: 0, corner: 0, passes: 0 }; // overlays = gizmos (drawn on top) + corner (small viewport) + passes (full screen)
 		this.unrecognizedAttributes = new Set();
 		this.targets = new Map();        // framebuffer id -> { draws, last }: how many draw calls, and the last one
 		this.surfaces = new Map();       // "context:framebuffer" -> { area, depth }: largest viewport, any depth-tested draw
@@ -2391,8 +2405,10 @@ function finalizeMeshes(session) {
 			const screenPass = mesh.vertexCount <= 4 && ((sampled > 0 && sampled === mesh.textures.length) ||
 				(coversClipSpace(mesh.positions) && (sampled > 0 || !mesh.depthTest || !mesh.normals)));
 			const helper = visible.get(mesh.geometryKey).onTop;
-			if (overlay || screenPass || helper)
+			if (overlay || screenPass || helper) {
 				session.stats.overlays++;
+				session.stats[overlay ? 'corner' : screenPass ? 'passes' : 'gizmos']++;
+			}
 			return !overlay && !screenPass && !helper;
 		});
 	}
@@ -2910,6 +2926,7 @@ function saveBlob(filename, blob) {
 }
 
 const sleep = (ms) => new Promise(resolve => native.setTimeout(resolve, ms));
+const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
 /* An export runs on the page's main thread. Long loops call this to let the page render a frame (and the preview
  * respond) every few dozen milliseconds. It yields with a message: timers are throttled in background tabs. */
@@ -3375,26 +3392,68 @@ function previewData(capture, scene) {
 		title: location.hostname || document.title || 'page',
 		format: capture.settings.format,
 		flipV: capture.settings.unflip,
-		meshes: scene.meshes.map(mesh => {
-			const base = mesh.textures.find(t => t.slot === 'map_Kd' && t.entry && t.entry.png);
-			return {
-				name: mesh.name,
-				positions: mesh.positions,
-				normals: mesh.normals,
-				uvs: mesh.uvs,
-				triangles: mesh.triangles,
-				vertexCount: mesh.vertexCount,
-				triangleCount: mesh.triangleCount,
-				color: mesh.material ? mesh.material.color : mesh.color,
-				texture: base ? base.entry.png.blob : null,
-				textureWidth: base ? base.entry.png.width : 0,
-				textureHeight: base ? base.entry.png.height : 0,
-				picked: !!mesh.picked,
-				background: !!mesh.background,
-				selected: capture.pick ? !!mesh.picked : !mesh.background
-			};
-		})
+		meshes: scene.meshes.map(mesh => previewMesh(capture, mesh))
 	};
+}
+
+function previewMesh(capture, mesh) {
+	const base = mesh.textures.find(t => t.slot === 'map_Kd' && t.entry && t.entry.png);
+	return {
+		name: mesh.name,
+		positions: mesh.positions,
+		normals: mesh.normals,
+		uvs: mesh.uvs,
+		triangles: mesh.triangles,
+		vertexCount: mesh.vertexCount,
+		triangleCount: mesh.triangleCount,
+		color: mesh.material ? mesh.material.color : mesh.color,
+		texture: base ? base.entry.png.blob : null,
+		textureWidth: base ? base.entry.png.width : 0,
+		textureHeight: base ? base.entry.png.height : 0,
+		picked: !!mesh.picked,
+		background: !!mesh.background,
+		selected: capture.pick ? !!mesh.picked : !mesh.background
+	};
+}
+
+const OBJECTS_SHOWN = 12;
+
+/* What was saved, for the popup: the biggest meshes with a rendered thumbnail, their size and textures. */
+async function describeObjects(capture, meshes) {
+	const top = meshes.slice().sort((a, b) => b.triangleCount - a.triangleCount).slice(0, OBJECTS_SHOWN);
+	let thumbnails = [];
+	if (viewerApi && typeof viewerApi.thumbnails === 'function') {
+		try {
+			thumbnails = await viewerApi.thumbnails(top.map(mesh => previewMesh(capture, mesh)), capture.settings.unflip, 64);
+		} catch (err) {
+			log('Thumbnails failed:', err);
+		}
+	}
+	const channel = (c) => Math.round(Math.pow(Math.min(Math.max(c, 0), 1), 1 / 2.2) * 255).toString(16).padStart(2, '0');
+	return top.map((mesh, i) => {
+		const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+		const p = mesh.positions;
+		for (let v = 0; v < p.length; v += 3) {
+			for (let k = 0; k < 3; k++) {
+				if (p[v + k] < lo[k]) lo[k] = p[v + k];
+				if (p[v + k] > hi[k]) hi[k] = p[v + k];
+			}
+		}
+		const textures = mesh.textures.filter(t => t.entry && t.entry.png);
+		const base = textures.find(t => t.slot === 'map_Kd');
+		const color = mesh.material && mesh.material.color;
+		return {
+			name: mesh.name,
+			triangles: mesh.triangleCount,
+			vertices: mesh.positionCount || mesh.vertexCount,
+			size: lo[0] <= hi[0] ? lo.map((l, k) => hi[k] - l).map((n, k, all) => (n < Math.max(...all) * 1e-4 ? 0 : Number(n.toPrecision(3)))) : null,
+			textures: textures.length,
+			texture: base ? `${base.entry.png.width}×${base.entry.png.height}` : null,
+			color: color ? `#${color.slice(0, 3).map(channel).join('')}` : null,
+			picked: !!mesh.picked,
+			thumbnail: typeof thumbnails[i] === 'string' && /^data:image\/(webp|png);base64,/.test(thumbnails[i]) ? thumbnails[i] : null
+		};
+	});
 }
 
 /* ------------------------------------------------------------------------------------------------------------
@@ -3429,7 +3488,7 @@ function scheduleContextsReport() {
 		return;
 	contextsReportTimer = native.setTimeout(() => {
 		contextsReportTimer = 0;
-		emit({ type: 'contexts', count: visibleContextCount() });
+		emit({ type: 'contexts', count: visibleContextCount(), canvases: canvasList() });
 	}, 300);
 }
 
@@ -3506,7 +3565,7 @@ async function finishCapture(capture) {
 	capture.uniforms.clear();
 	capture.exactKeys.clear();
 	const progress = (text) => setStatus('exporting', text);
-	setStatus('exporting', `Recorded ${capture.meshes.length} mesh(es) from ${capture.drawCount} draw call(s)…`);
+	setStatus('exporting', `Recorded ${plural(capture.meshes.length, 'mesh', 'meshes')} from ${plural(capture.drawCount, 'draw call')}…`);
 	try {
 		const chooser = testHook && typeof testHook.onPreview === 'function' ? testHook.onPreview
 			: viewerApi ? (data) => viewerApi.open(data) : null;
@@ -3530,8 +3589,18 @@ async function finishCapture(capture) {
 			buildMaterials(meshes);
 		}
 		const result = await writeExport(capture, scene, meshes, format, progress);
-		let text = `Saved ${result.meshes} mesh(es) and ${result.textures} texture(s)`;
-		text += result.failedTextures ? ` (${result.failedTextures} texture(s) could not be read).` : '.';
+		// for the popup: what was saved, and what was left out and why
+		result.objects = await describeObjects(capture, meshes);
+		result.leftOut = {
+			gizmos: capture.stats.gizmos,
+			corner: capture.stats.corner,
+			passes: capture.stats.passes,
+			duplicates: capture.stats.duplicates,
+			background: scene.meshes.filter(mesh => mesh.background && !meshes.includes(mesh)).length,
+			unselected: scene.meshes.filter(mesh => !mesh.background && !meshes.includes(mesh)).length
+		};
+		let text = `Saved ${plural(result.meshes, 'mesh', 'meshes')} and ${plural(result.textures, 'texture')}`;
+		text += result.failedTextures ? ` (${plural(result.failedTextures, 'texture')} could not be read).` : '.';
 		setStatus('done', text, result);
 	} catch (err) {
 		if (!(err instanceof RipperError))
@@ -3647,7 +3716,7 @@ function onCommand(event) {
 		return;
 	switch (message.type) {
 		case 'hello':
-			emit({ type: 'ready', contexts: visibleContextCount(), ...status });
+			emit({ type: 'ready', contexts: visibleContextCount(), canvases: canvasList(), ...status });
 			break;
 		case 'settings':
 			applySettings(message.settings);

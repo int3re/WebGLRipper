@@ -12,7 +12,7 @@
 
 	let settings = null;
 	let pendingCommand = null;
-	let engine = { contexts: 0, state: 'idle', text: '', result: null };
+	let engine = { contexts: 0, canvases: [], state: 'idle', text: '', result: null };
 	const ports = new Set();
 
 	function toPage(message) {
@@ -79,12 +79,15 @@
 			return;
 		switch (message.type) {
 			case 'ready':
-				engine = { ...engine, contexts: message.contexts | 0, state: message.state || 'idle', text: message.text || '', result: message.result || null };
+				engine = { ...engine, contexts: message.contexts | 0, canvases: Array.isArray(message.canvases) ? message.canvases : engine.canvases,
+					state: message.state || 'idle', text: message.text || '', result: message.result || null };
 				if (settings)
 					toPage({ type: 'settings', settings });
 				break;
 			case 'contexts':
 				engine.contexts = message.count | 0;
+				if (Array.isArray(message.canvases))
+					engine.canvases = message.canvases;
 				if (engine.contexts > 0)
 					toBackground({ type: 'webglripper:contexts', count: engine.contexts });
 				break;
@@ -94,8 +97,10 @@
 				engine.text = message.text || '';
 				engine.result = message.result || null;
 				// frames without WebGL answer every command with 'idle'; only real changes go to the toolbar badge
+				// the badge only needs the numbers; thumbnails stay here for the popup
+				const result = message.result ? { ...message.result, objects: undefined } : null;
 				if (message.state !== 'idle' || (previous && previous !== 'idle'))
-					toBackground({ type: 'webglripper:state', state: message.state, result: message.result || null });
+					toBackground({ type: 'webglripper:state', state: message.state, result });
 				break;
 			}
 			default:
@@ -138,6 +143,7 @@
 				startCapture(message.type);
 		});
 		port.postMessage(snapshot());
+		toPage({ type: 'hello' }); // canvases may have been resized since they were reported
 	});
 
 	api.storage.onChanged.addListener((changes, area) => {

@@ -76,6 +76,11 @@ extension's card.
 
 **Just one object?** Press <kbd>Shift</kbd>+<kbd>Insert</kbd> (or **Pick object** in the popup) and click it.
 
+The toolbar popup shows what is on the page and what the last rip saved: every object with a thumbnail, its triangles,
+texture and size, and what was left out (gizmos, helpers, shadow passes, backgrounds).
+
+<img src="docs/images/popup.png" width="368" alt="The popup: the WebGL canvas of the page, the last rip with a thumbnail of the saved object, and what was left out">
+
 The toolbar badge shows **GL** when the page has WebGL content, **PICK** while waiting for your click, **REC** while a
 frame is recorded, **SEL** while the preview is open, and then the number of saved meshes. If a scene only redraws when
 something changes, move the camera a little after pressing the hotkey. No <kbd>Insert</kbd> key? Choose other hotkeys

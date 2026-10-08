@@ -271,6 +271,23 @@ async function extensionTests(devtools, base) {
 	if (quick)
 		checkPickedCube(quick[1].name, fs.readFileSync(path.join(downloadDir, quick[0])));
 
+	// The popup tells what is on the page and what the last rip saved
+	const [frameTab] = await evaluate(devtools, settingsPage.sessionId, `chrome.tabs.query({ url: '${base}/tests/e2e-frame.html' })`);
+	const found = await openPage(devtools, `chrome-extension://${extensionId}/popup.html?tab=${frameTab.id}`);
+	const shown = await poll(() => evaluate(devtools, found.sessionId, `document.getElementById('last').hidden ? null : ({
+		canvases: Array.from(document.querySelectorAll('#canvas-list .chip'), c => c.textContent),
+		objects: Array.from(document.querySelectorAll('#objects .object'), o => ({
+			thumbnail: (o.querySelector('img.thumb') || {}).src || '', name: o.querySelector('.name').textContent, info: o.querySelector('.info').textContent
+		})),
+		meta: document.getElementById('last-meta').textContent, status: document.getElementById('status-text').textContent
+	})`), 5000);
+	report('popup lists the WebGL canvas of the page', !!shown && shown.canvases.length === 1 && /^\d+×\d+ · WebGL [12]$/.test(shown.canvases[0]), shown);
+	report('popup shows the saved object with a rendered thumbnail, triangles and texture', !!shown && shown.objects.length === 1 &&
+		/^data:image\/(webp|png);base64,/.test(shown.objects[0].thumbnail) && /picked/.test(shown.objects[0].name) &&
+		/12 triangles · \d+×\d+ texture/.test(shown.objects[0].info) && /^1 object · GLB/.test(shown.meta) && /^Saved 1 mesh and 1 texture\.$/.test(shown.status), shown);
+	report('no errors in the popup after a rip', found.errors.length === 0, found.errors);
+	await devtools.send('Target.closeTarget', { targetId: found.targetId });
+
 	// Options page
 	const options = await openPage(devtools, `chrome-extension://${extensionId}/options.html`);
 	await sleep(800);

@@ -19,11 +19,26 @@
 		<span id="status-text">Looking for WebGL content…</span>
 	</div>
 
+	<div id="canvases" class="canvases" hidden>
+		<span class="label">On this page</span>
+		<span id="canvas-list" class="chips"></span>
+	</div>
+
 	<div class="buttons">
 		<button id="capture" class="primary" disabled>Rip next frame</button>
 		<button id="pick" disabled title="Click an object in the page to rip only that object">Pick object</button>
 	</div>
 	<p id="detail" class="detail" hidden></p>
+
+	<section id="last" class="last" hidden>
+		<div class="last-head">
+			<h2>Last rip</h2>
+			<span id="last-meta" class="muted"></span>
+		</div>
+		<ul id="objects" class="objects"></ul>
+		<p id="more" class="more muted" hidden></p>
+		<p id="left-out" class="left-out" hidden></p>
+	</section>
 
 	<footer>
 		<span>Rip <kbd id="hotkey">Insert</kbd> · Pick <kbd id="pick-hotkey">Shift + Insert</kbd></span>

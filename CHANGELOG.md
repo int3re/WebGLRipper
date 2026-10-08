@@ -1,5 +1,20 @@
 # Changelog
 
+## 1.2.0
+
+### Added
+
+- **The popup shows what was found.** *On this page* lists the WebGL canvases of the tab (size, WebGL 1 or 2, also
+  inside frames). After a rip, *Last rip* lists the saved objects with a thumbnail rendered from the mesh, its
+  triangles, base color texture and size, and says what was left out and why: gizmo parts, corner helpers,
+  full-screen passes, shadow and depth copies, backgrounds.
+- **The preview list shows each mesh**: a rendered thumbnail of its shape with its texture or color instead of a flat
+  swatch, and a second line with triangles, texture size and dimensions, so it is clear which mesh is which.
+
+### Changed
+
+- Status texts count properly ("Saved 1 mesh and 1 texture").
+
 ## 1.1.3
 
 ### Fixed
