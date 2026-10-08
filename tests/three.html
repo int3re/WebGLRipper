@@ -1,0 +1,167 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper three.js test</title>
+	<script>
+		window.__WEBGLRIPPER_TEST__ = {
+			downloads: [],
+			onDownload(name, blob) { this.downloads.push({ name, blob }); }
+		};
+	</script>
+	<script src="../webglripper.js"></script>
+	<script type="importmap">
+		{ "imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+		} }
+	</script>
+</head>
+<body style="margin:0">
+	<pre id="log"></pre>
+	<script type="module">
+		import * as THREE from 'three';
+		import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+		import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+		import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+		import { ViewHelper } from 'three/addons/helpers/ViewHelper.js';
+		import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+		const renderer = new THREE.WebGLRenderer({ antialias: false });
+		renderer.setSize(480, 320);
+		renderer.shadowMap.enabled = true;
+		document.body.prepend(renderer.domElement);
+
+		const scene = new THREE.Scene();
+		const camera = new THREE.PerspectiveCamera(50, 480 / 320, 0.1, 100);
+		camera.position.set(0, 6, 20);
+		camera.lookAt(0, 0, 0);
+
+		const light = new THREE.DirectionalLight(0xffffff, 2);
+		light.position.set(5, 10, 5);
+		light.castShadow = true;
+		scene.add(light, new THREE.AmbientLight(0xffffff, 0.3));
+
+		const pixels = new Uint8Array(4 * 4 * 4).map((_, i) => (i % 4 === 3 ? 255 : (i * 37) & 255));
+		const texture = new THREE.DataTexture(pixels, 4, 4);
+		texture.needsUpdate = true;
+
+		const box = new THREE.Mesh(new THREE.BoxGeometry(2, 2, 2), new THREE.MeshStandardMaterial({ map: texture }));
+		box.position.set(5, 0, 0);
+		box.castShadow = true;
+		const sphere = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), new THREE.MeshBasicMaterial({ color: 0x44aa88 }));
+		sphere.position.set(-5, 2, 0);
+		sphere.castShadow = true;
+		const ground = new THREE.Mesh(new THREE.PlaneGeometry(20, 20), new THREE.MeshStandardMaterial({ color: 0x808080 }));
+		ground.rotation.x = -Math.PI / 2;
+		ground.position.y = -2;
+		// Every mesh casts a shadow, so the shadow map gets as many draws as the scene pass
+		ground.castShadow = ground.receiveShadow = true;
+		// IcosahedronGeometry has no index buffer: every triangle has its own three vertices
+		const gem = new THREE.Mesh(new THREE.IcosahedronGeometry(0.8, 2), new THREE.MeshBasicMaterial({ color: 0xcc3355 }));
+		gem.position.set(0, 2, -4);
+		gem.castShadow = true;
+		scene.add(box, sphere, ground, gem);
+
+		// Post-processing and an axis gizmo in the corner, as in many model viewers
+		const composer = new EffectComposer(renderer);
+		composer.addPass(new RenderPass(scene, camera));
+		composer.addPass(new OutputPass());
+		const gizmo = new ViewHelper(camera, renderer.domElement);
+
+		renderer.setAnimationLoop(() => {
+			box.rotation.y += 0.01;
+			composer.render();
+			renderer.autoClear = false;
+			gizmo.render(renderer);
+			renderer.autoClear = true;
+		});
+
+		async function run() {
+			await new Promise(r => setTimeout(r, 500));
+			const T = window.__WEBGLRIPPER_TEST__;
+			const done = new Promise(resolve => {
+				document.addEventListener('webglripper:ext', function listener(event) {
+					const message = JSON.parse(event.detail);
+					if (message.type === 'state' && ['done', 'error', 'idle'].includes(message.state)) {
+						document.removeEventListener('webglripper:ext', listener);
+						resolve(message);
+					}
+				});
+			});
+			document.dispatchEvent(new CustomEvent('webglripper:page', {
+				detail: JSON.stringify({ type: 'capture', settings: { should_download_zip: false, export_layout: 'separate', export_format: 'both', center_model: false, show_preview: false, __version: 'test' } })
+			}));
+			const result = await done;
+			const objs = await Promise.all(T.downloads.filter(d => d.name.endsWith('.obj')).map(d => d.blob.text()));
+			const meshes = objs.map(text => {
+				const v = text.split('\n').filter(l => l.startsWith('v ')).map(l => l.split(' ').slice(1).map(Number));
+				const min = [0, 1, 2].map(i => Math.min(...v.map(p => p[i])));
+				const max = [0, 1, 2].map(i => Math.max(...v.map(p => p[i])));
+				return {
+					vertices: v.length,
+					faces: text.split('\n').filter(l => l.startsWith('f ')).length,
+					center: min.map((m, i) => +((m + max[i]) / 2).toFixed(3)),
+					size: min.map((m, i) => +(max[i] - m).toFixed(3)),
+					usemtl: (text.match(/usemtl (\S+)/) || [])[1]
+				};
+			});
+			const mtl = await (T.downloads.find(d => d.name.endsWith('materials.mtl'))?.blob.text() ?? '');
+			// The GLB, loaded back with three.js itself
+			let glb = null;
+			const glbFile = T.downloads.find(d => d.name.endsWith('.glb'));
+			if (glbFile) {
+				try {
+					const gltf = await new GLTFLoader().parseAsync(await glbFile.blob.arrayBuffer(), '');
+					glb = [];
+					gltf.scene.traverse(object => {
+						if (!object.isMesh)
+							return;
+						object.geometry.computeBoundingBox();
+						const box = object.geometry.boundingBox;
+						glb.push({
+							name: object.name,
+							vertices: object.geometry.attributes.position.count,
+							normals: !!object.geometry.attributes.normal,
+							map: !!object.material.map,
+							center: [0, 1, 2].map(i => +((box.min.getComponent(i) + box.max.getComponent(i)) / 2).toFixed(3))
+						});
+					});
+				} catch (err) {
+					glb = { error: String(err) };
+				}
+			}
+			// Pick mode through EffectComposer: the scene is drawn into a half-float render target first
+			T.downloads.length = 0;
+			const picked = new Promise(resolve => {
+				document.addEventListener('webglripper:ext', function listener(event) {
+					const message = JSON.parse(event.detail);
+					if (message.type === 'state' && ['done', 'error', 'idle'].includes(message.state)) {
+						document.removeEventListener('webglripper:ext', listener);
+						resolve(message);
+					}
+				});
+			});
+			document.dispatchEvent(new CustomEvent('webglripper:page', {
+				detail: JSON.stringify({ type: 'pick', settings: { export_format: 'obj', should_download_zip: false, center_model: false, show_preview: false, __version: 'test' } })
+			}));
+			const canvas = renderer.domElement;
+			const rect = canvas.getBoundingClientRect();
+			const point = gem.position.clone().project(camera);
+			canvas.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, cancelable: true, button: 0,
+				clientX: rect.left + (point.x + 1) / 2 * rect.width, clientY: rect.top + (1 - point.y) / 2 * rect.height }));
+			const pickResult = await picked;
+			const pickedObjs = await Promise.all(T.downloads.filter(d => d.name.endsWith('.obj')).map(d => d.blob.text()));
+			const pick = {
+				state: pickResult.state,
+				text: pickResult.text,
+				objects: pickedObjs.length,
+				vertices: pickedObjs[0] ? pickedObjs[0].split('\n').filter(l => l.startsWith('v ')).length : 0
+			};
+			window.testResults = { state: result.state, text: result.text, meshes, mtl, glb, pick, files: T.downloads.map(d => d.name) };
+			document.getElementById('log').textContent = JSON.stringify(window.testResults, null, 2);
+		}
+		run();
+	</script>
+</body>
+</html>

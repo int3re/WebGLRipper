@@ -1,0 +1,167 @@
+:root {
+	color-scheme: light dark;
+	--bg: #ffffff;
+	--surface: #f4f5f7;
+	--border: #d9dce1;
+	--text: #1d2127;
+	--muted: #5f6672;
+	--accent: #1a73e8;
+	--accent-text: #ffffff;
+	--ok: #2e7d32;
+	--warn: #ef6c00;
+	--busy: #f9a825;
+	--idle: #9aa0a6;
+	font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+@media (prefers-color-scheme: dark) {
+	:root {
+		--bg: #1f2125;
+		--surface: #2a2d33;
+		--border: #3c4048;
+		--text: #e8eaed;
+		--muted: #a0a6b0;
+		--accent: #8ab4f8;
+		--accent-text: #13161a;
+		--ok: #81c995;
+		--warn: #fcad70;
+		--busy: #fdd663;
+		--idle: #80868b;
+	}
+}
+
+* { box-sizing: border-box; }
+
+body {
+	margin: 0;
+	background: var(--bg);
+	color: var(--text);
+}
+
+h1, h2 { margin: 0; font-weight: 600; }
+h1 { font-size: 16px; }
+h2 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+
+a { color: var(--accent); }
+
+.muted { color: var(--muted); font-size: 12px; }
+
+kbd {
+	font: 12px ui-monospace, Consolas, monospace;
+	padding: 1px 6px;
+	border: 1px solid var(--border);
+	border-bottom-width: 2px;
+	border-radius: 4px;
+	background: var(--surface);
+}
+
+button {
+	font: inherit;
+	cursor: pointer;
+	border-radius: 6px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--text);
+	padding: 6px 12px;
+}
+button:disabled { cursor: default; opacity: .55; }
+button.primary {
+	background: var(--accent);
+	border-color: var(--accent);
+	color: var(--accent-text);
+	font-weight: 600;
+}
+
+/* ---- popup ---- */
+
+body.popup { width: 320px; padding: 14px; }
+
+.brand { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+.brand img { border-radius: 50%; }
+
+.status {
+	display: flex;
+	gap: 8px;
+	align-items: flex-start;
+	padding: 10px 12px;
+	border-radius: 8px;
+	background: var(--surface);
+	margin-bottom: 12px;
+	min-height: 42px;
+}
+.status .dot {
+	flex: none;
+	width: 10px;
+	height: 10px;
+	margin-top: 5px;
+	border-radius: 50%;
+	background: var(--idle);
+}
+.status[data-state="ready"] .dot,
+.status[data-state="done"] .dot { background: var(--ok); }
+.status[data-state="waiting"] .dot,
+.status[data-state="capturing"] .dot,
+.status[data-state="exporting"] .dot,
+.status[data-state="picking"] .dot,
+.status[data-state="preview"] .dot { background: var(--busy); animation: pulse 1s infinite alternate; }
+.status[data-state="error"] .dot,
+.status[data-state="unavailable"] .dot { background: var(--warn); }
+
+@keyframes pulse { from { opacity: 1; } to { opacity: .35; } }
+
+body.popup .buttons { display: flex; gap: 8px; }
+body.popup .buttons button { padding: 9px 12px; }
+body.popup button.primary { flex: 1; }
+
+.detail { margin: 8px 0 0; font-size: 12px; color: var(--muted); word-break: break-all; }
+
+.popup footer {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	margin-top: 14px;
+	font-size: 12px;
+	color: var(--muted);
+}
+
+/* ---- options ---- */
+
+body.options { max-width: 720px; margin: 0 auto; padding: 24px 20px 48px; }
+
+.options header { display: flex; align-items: center; gap: 12px; margin-bottom: 24px; }
+
+.options section {
+	border: 1px solid var(--border);
+	border-radius: 10px;
+	padding: 16px;
+	margin-bottom: 16px;
+}
+
+.row {
+	display: flex;
+	justify-content: space-between;
+	align-items: center;
+	gap: 16px;
+	padding: 8px 0;
+}
+.row + .row { border-top: 1px solid var(--border); }
+.row .label { display: flex; flex-direction: column; gap: 2px; }
+.row .label span:first-child { font-size: 14px; font-weight: 500; }
+.row .label span + span { color: var(--muted); font-size: 12px; }
+.row select, .row input[type="text"] {
+	font: inherit;
+	color: var(--text);
+	background: var(--bg);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	padding: 5px 8px;
+}
+.row input[type="text"] { width: 260px; }
+.row input[type="checkbox"] { width: 18px; height: 18px; flex: none; }
+
+.hotkey { display: flex; gap: 8px; align-items: center; }
+.hotkey button.recording { border-color: var(--accent); color: var(--accent); }
+
+.actions { display: flex; gap: 12px; align-items: center; }
+#saved { color: var(--ok); font-size: 12px; opacity: 0; transition: opacity .2s; }
+#saved.visible { opacity: 1; }

@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper</title>
+	<link rel="stylesheet" href="ui.css">
+</head>
+<body class="popup">
+	<header class="brand">
+		<img src="icons/icon32.png" alt="" width="28" height="28">
+		<div>
+			<h1>WebGL Ripper</h1>
+			<span id="version" class="muted"></span>
+		</div>
+	</header>
+
+	<div id="status" class="status" data-state="loading">
+		<span class="dot"></span>
+		<span id="status-text">Looking for WebGL content…</span>
+	</div>
+
+	<div class="buttons">
+		<button id="capture" class="primary" disabled>Rip next frame</button>
+		<button id="pick" disabled title="Click an object in the page to rip only that object">Pick object</button>
+	</div>
+	<p id="detail" class="detail" hidden></p>
+
+	<footer>
+		<span>Rip <kbd id="hotkey">Insert</kbd> · Pick <kbd id="pick-hotkey">Shift + Insert</kbd></span>
+		<a href="#" id="open-options">Options</a>
+	</footer>
+
+	<script src="settings.js"></script>
+	<script src="popup.js"></script>
+</body>
+</html>

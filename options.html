@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper Options</title>
+	<link rel="stylesheet" href="ui.css">
+</head>
+<body class="options">
+	<header>
+		<img src="icons/icon48.png" alt="" width="40" height="40">
+		<div>
+			<h1>WebGL Ripper</h1>
+			<span id="version" class="muted"></span>
+		</div>
+	</header>
+
+	<section>
+		<h2>Capture</h2>
+		<div class="row">
+			<label class="label">
+				<span>Hotkey</span>
+				<span>Rips the next frame of the current tab. You can also use the toolbar button.</span>
+			</label>
+			<div class="hotkey">
+				<button id="hotkey-record" type="button" data-setting="capture_hotkey">Insert</button>
+				<button id="hotkey-clear" type="button" data-setting="capture_hotkey" title="Disable the hotkey">✕</button>
+			</div>
+		</div>
+		<div class="row">
+			<label class="label">
+				<span>Pick hotkey</span>
+				<span>The next click on the page rips only the object under the cursor.</span>
+			</label>
+			<div class="hotkey">
+				<button id="pick-hotkey-record" type="button" data-setting="pick_hotkey">Shift + Insert</button>
+				<button id="pick-hotkey-clear" type="button" data-setting="pick_hotkey" title="Disable the hotkey">✕</button>
+			</div>
+		</div>
+		<div class="row">
+			<label class="label" for="show_preview">
+				<span>Preview before download</span>
+				<span>Shows what was captured in the page: turn it around and choose the meshes to keep.</span>
+			</label>
+			<input type="checkbox" id="show_preview">
+		</div>
+		<div class="row">
+			<label class="label" for="skip_duplicates">
+				<span>Skip duplicate draws</span>
+				<span>Ignores geometry drawn again by depth or shadow passes.</span>
+			</label>
+			<input type="checkbox" id="skip_duplicates">
+		</div>
+		<div class="row">
+			<label class="label" for="skip_overlays">
+				<span>Skip viewer overlays</span>
+				<span>Ignores axis gizmos and other helpers drawn in a small viewport, and post-processing passes.</span>
+			</label>
+			<input type="checkbox" id="skip_overlays">
+		</div>
+	</section>
+
+	<section>
+		<h2>Output</h2>
+		<div class="row">
+			<label class="label" for="export_format">
+				<span>Format</span>
+				<span>GLB is one file with textures and PBR materials; OBJ is the classic OBJ + MTL + PNG set.</span>
+			</label>
+			<select id="export_format">
+				<option value="glb">GLB</option>
+				<option value="obj">OBJ</option>
+				<option value="both">GLB + OBJ</option>
+			</select>
+		</div>
+		<div class="row">
+			<label class="label" for="should_download_zip">
+				<span>Download OBJ as ZIP</span>
+				<span>One file per capture. Otherwise every model and texture is a separate download.</span>
+			</label>
+			<input type="checkbox" id="should_download_zip">
+		</div>
+		<div class="row">
+			<label class="label" for="export_layout">
+				<span>OBJ layout</span>
+				<span>Separate files per mesh, a single scene.obj, or both.</span>
+			</label>
+			<select id="export_layout">
+				<option value="separate">One OBJ per mesh</option>
+				<option value="combined">One combined scene.obj</option>
+				<option value="both">Both</option>
+			</select>
+		</div>
+		<div class="row">
+			<label class="label" for="do_model_view_matrix">
+				<span>Place meshes in the scene</span>
+				<span>Applies the model matrix found in the shader, so objects keep their positions.</span>
+			</label>
+			<input type="checkbox" id="do_model_view_matrix">
+		</div>
+		<div class="row">
+			<label class="label" for="center_model">
+				<span>Move to the origin</span>
+				<span>Centers the export and stands it on the floor, ready to use in Blender.</span>
+			</label>
+			<input type="checkbox" id="center_model">
+		</div>
+		<div class="row">
+			<label class="label" for="compute_normals">
+				<span>Smooth normals when missing</span>
+				<span>Computes normals for meshes the page drew without any; hard edges stay hard.</span>
+			</label>
+			<input type="checkbox" id="compute_normals">
+		</div>
+		<div class="row">
+			<label class="label" for="export_vertex_colors">
+				<span>Export vertex colors</span>
+				<span>Written as "v x y z r g b", supported by Blender and MeshLab.</span>
+			</label>
+			<input type="checkbox" id="export_vertex_colors">
+		</div>
+		<div class="row">
+			<label class="label" for="weld_vertices">
+				<span>Merge duplicate vertices</span>
+				<span>Reconnects triangles that the page drew as separate vertices: smaller files, editable meshes.</span>
+			</label>
+			<input type="checkbox" id="weld_vertices">
+		</div>
+	</section>
+
+	<section>
+		<h2>Textures</h2>
+		<div class="row">
+			<label class="label" for="unflip_textures">
+				<span>Unflip textures</span>
+				<span>WebGL stores images bottom-up; keep this on for correct UV mapping in OBJ viewers.</span>
+			</label>
+			<input type="checkbox" id="unflip_textures">
+		</div>
+		<div class="row">
+			<label class="label" for="default_texture_res">
+				<span>Fallback texture size</span>
+				<span>Only used when the real size of a texture could not be detected.</span>
+			</label>
+			<select id="default_texture_res">
+				<option value="256x256">256 × 256</option>
+				<option value="512x512">512 × 512</option>
+				<option value="1024x1024">1024 × 1024</option>
+				<option value="2048x2048">2048 × 2048</option>
+				<option value="4096x4096">4096 × 4096</option>
+				<option value="8192x8192">8192 × 8192</option>
+			</select>
+		</div>
+	</section>
+
+	<section>
+		<h2>Advanced</h2>
+		<p class="muted">Extra shader names for engines that WebGL Ripper doesn't recognize. Comma separated, case insensitive.
+			The <code>rip-info.json</code> file inside every ZIP and the debug log list the names a page uses.</p>
+		<div class="row">
+			<label class="label" for="extra_position_names"><span>Position attributes</span></label>
+			<input type="text" id="extra_position_names" placeholder="e.g. in_ATTRIBUTE0">
+		</div>
+		<div class="row">
+			<label class="label" for="extra_normal_names"><span>Normal attributes</span></label>
+			<input type="text" id="extra_normal_names">
+		</div>
+		<div class="row">
+			<label class="label" for="extra_uv_names"><span>UV attributes</span></label>
+			<input type="text" id="extra_uv_names">
+		</div>
+		<div class="row">
+			<label class="label" for="extra_texture_names"><span>Diffuse texture samplers</span></label>
+			<input type="text" id="extra_texture_names">
+		</div>
+		<div class="row">
+			<label class="label" for="extra_matrix_names"><span>Model matrix uniforms</span></label>
+			<input type="text" id="extra_matrix_names">
+		</div>
+		<div class="row">
+			<label class="label" for="is_debug_mode">
+				<span>Debug logging</span>
+				<span>Prints details about every capture to the page's developer console.</span>
+			</label>
+			<input type="checkbox" id="is_debug_mode">
+		</div>
+	</section>
+
+	<div class="actions">
+		<button id="reset" type="button">Reset to defaults</button>
+		<span id="saved">Saved</span>
+	</div>
+
+	<script src="settings.js"></script>
+	<script src="options.js"></script>
+</body>
+</html>

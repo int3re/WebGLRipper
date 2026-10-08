@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper overhead benchmark</title>
+	<script>
+		// bench.html?engine=1 loads the ripper, bench.html?engine=0 measures the bare page
+		window.__WEBGLRIPPER_TEST__ = { downloads: [], onDownload(name, blob) { this.downloads.push({ name, size: blob.size }); } };
+		const engineParam = new URLSearchParams(location.search).get('engine');
+		if (engineParam !== '0')
+			document.write('<script src="../webglripper.js"><\/script>');
+	</script>
+</head>
+<body>
+	<canvas id="gl2" width="256" height="256"></canvas>
+	<canvas id="gl1" width="256" height="256"></canvas>
+	<script>
+	'use strict';
+	const params = new URLSearchParams(location.search);
+	const DRAWS = +(params.get('draws') ?? 3000), STREAM_UPLOADS = +(params.get('uploads') ?? 500), FRAMES = 120;
+
+	function compile(gl, vs, fs) {
+		const p = gl.createProgram();
+		for (const [type, src] of [[gl.VERTEX_SHADER, vs], [gl.FRAGMENT_SHADER, fs]]) {
+			const s = gl.createShader(type); gl.shaderSource(s, src); gl.compileShader(s); gl.attachShader(p, s);
+		}
+		gl.bindAttribLocation(p, 0, 'position'); gl.bindAttribLocation(p, 1, 'uv');
+		gl.linkProgram(p);
+		return p;
+	}
+	const VS = 'attribute vec3 position; attribute vec2 uv; uniform mat4 modelMatrix; varying vec2 vUv; void main(){ vUv = uv; gl_Position = modelMatrix * vec4(position * 0.01, 1.0); }';
+	const FS = 'precision mediump float; uniform sampler2D map; varying vec2 vUv; void main(){ gl_FragColor = texture2D(map, vUv); }';
+
+	// WebGL 2: many small draw calls out of one shared buffer, 8 textures (a typical scene graph)
+	const gl2 = document.getElementById('gl2').getContext('webgl2');
+	const program2 = compile(gl2, VS, FS);
+	const quads = 1000;
+	const vertices = new Float32Array(quads * 4 * 5);
+	const indices = new Uint16Array(quads * 6);
+	for (let q = 0; q < quads; q++) {
+		[[0, 0], [1, 0], [1, 1], [0, 1]].forEach(([x, y], k) => vertices.set([x + q % 30, y + (q / 30 | 0), 0, x, y], (q * 4 + k) * 5));
+		indices.set([0, 1, 2, 0, 2, 3].map(i => (q * 4 + i) % 65536), q * 6);
+	}
+	const vao = gl2.createVertexArray(); gl2.bindVertexArray(vao);
+	const vbo = gl2.createBuffer(); gl2.bindBuffer(gl2.ARRAY_BUFFER, vbo); gl2.bufferData(gl2.ARRAY_BUFFER, vertices, gl2.STATIC_DRAW);
+	gl2.enableVertexAttribArray(0); gl2.vertexAttribPointer(0, 3, gl2.FLOAT, false, 20, 0);
+	gl2.enableVertexAttribArray(1); gl2.vertexAttribPointer(1, 2, gl2.FLOAT, false, 20, 12);
+	const ibo = gl2.createBuffer(); gl2.bindBuffer(gl2.ELEMENT_ARRAY_BUFFER, ibo); gl2.bufferData(gl2.ELEMENT_ARRAY_BUFFER, indices, gl2.STATIC_DRAW);
+	const textures = Array.from({ length: 8 }, (_, i) => {
+		const t = gl2.createTexture(); gl2.bindTexture(gl2.TEXTURE_2D, t);
+		gl2.texImage2D(gl2.TEXTURE_2D, 0, gl2.RGBA, 256, 256, 0, gl2.RGBA, gl2.UNSIGNED_BYTE, new Uint8Array(256 * 256 * 4).map((_, j) => (j * (i + 3)) & 255));
+		gl2.generateMipmap(gl2.TEXTURE_2D);
+		return t;
+	});
+	const modelMatrix = gl2.getUniformLocation(program2, 'modelMatrix');
+	const matrix = new Float32Array([1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
+
+	// WebGL 1: streaming uploads every frame (UI / particles), the worst case for the WebGL 1 shadow copies
+	const gl1 = document.getElementById('gl1').getContext('webgl');
+	const program1 = compile(gl1, VS, FS);
+	const stream = gl1.createBuffer(); gl1.bindBuffer(gl1.ARRAY_BUFFER, stream); gl1.bufferData(gl1.ARRAY_BUFFER, STREAM_UPLOADS * 1024, gl1.DYNAMIC_DRAW);
+	const chunk = new Float32Array(256);
+
+	const timings = [];
+	function frame() {
+		const start = performance.now();
+		gl2.useProgram(program2); gl2.bindVertexArray(vao);
+		for (let i = 0; i < DRAWS; i++) {
+			matrix[12] = (i % 7) * 0.1;
+			gl2.uniformMatrix4fv(modelMatrix, false, matrix);
+			gl2.bindTexture(gl2.TEXTURE_2D, textures[i % 8]);
+			gl2.drawElements(gl2.TRIANGLES, 6, gl2.UNSIGNED_SHORT, (i % quads) * 12);
+		}
+		gl1.useProgram(program1); gl1.bindBuffer(gl1.ARRAY_BUFFER, stream);
+		for (let i = 0; i < STREAM_UPLOADS; i++) {
+			chunk[0] = i;
+			gl1.bufferSubData(gl1.ARRAY_BUFFER, i * 1024, chunk);
+		}
+		gl1.enableVertexAttribArray(0); gl1.vertexAttribPointer(0, 3, gl1.FLOAT, false, 20, 0);
+		gl1.drawArrays(gl1.TRIANGLES, 0, 3);
+		timings.push(performance.now() - start);
+		if (timings.length < FRAMES) requestAnimationFrame(frame);
+		else finish();
+	}
+
+	async function finish() {
+		const median = timings.slice(10).sort((a, b) => a - b)[Math.floor((timings.length - 10) / 2)];
+		const result = { median: +median.toFixed(3) };
+		if (window.__WEBGLRIPPER_TEST__.internals && !params.has('nocapture')) {
+			const captureTimings = [];
+			const stateTimes = {};
+			const captureStart = performance.now();
+			const done = new Promise(resolve => document.addEventListener('webglripper:ext', function l(e) {
+				const m = JSON.parse(e.detail);
+				if (m.type === 'state') stateTimes[m.state] = stateTimes[m.state] || performance.now();
+				if (m.type === 'state' && ['done', 'error'].includes(m.state)) { document.removeEventListener('webglripper:ext', l); resolve(m); }
+			}));
+			document.dispatchEvent(new CustomEvent('webglripper:page', { detail: JSON.stringify({ type: 'capture', settings: { should_download_zip: true, export_format: params.get('format') || 'glb', show_preview: false } }) }));
+			const keepRendering = () => { frameOnce(); if (!result.done) requestAnimationFrame(keepRendering); };
+			const frameOnce = () => {
+				const s = performance.now();
+				gl2.useProgram(program2); gl2.bindVertexArray(vao);
+				for (let i = 0; i < DRAWS; i++) {
+					matrix[12] = (i % 7) * 0.1;
+					gl2.uniformMatrix4fv(modelMatrix, false, matrix);
+					gl2.bindTexture(gl2.TEXTURE_2D, textures[i % 8]);
+					gl2.drawElements(gl2.TRIANGLES, 6, gl2.UNSIGNED_SHORT, (i % quads) * 12);
+				}
+				captureTimings.push(performance.now() - s);
+			};
+			requestAnimationFrame(keepRendering);
+			const message = await done;
+			result.done = true;
+			result.capture = { state: message.state, text: message.text, totalMs: Math.round(performance.now() - captureStart),
+				slowestFrameMs: Math.round(Math.max(...captureTimings)), zipBytes: window.__WEBGLRIPPER_TEST__.downloads[0]?.size,
+				recordMs: Math.round(stateTimes.exporting - stateTimes.capturing), exportMs: Math.round(stateTimes.done - stateTimes.exporting) };
+		}
+		window.benchResult = result;
+	}
+	requestAnimationFrame(frame);
+	</script>
+</body>
+</html>

@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper engine tests</title>
+	<script>
+		// Must exist before the engine loads. Captures downloads instead of saving them.
+		window.__WEBGLRIPPER_TEST__ = {
+			downloads: [],
+			onDownload(name, blob) { this.downloads.push({ name, blob }); }
+		};
+	</script>
+	<script src="../webglripper.js"></script>
+	<style>
+		body { font: 13px/1.4 system-ui, sans-serif; margin: 16px; background: #fff; color: #111; }
+		canvas { border: 1px solid #ccc; margin-right: 8px; }
+		.pass { color: #1b7f2a; }
+		.fail { color: #c62828; font-weight: 600; }
+		pre { white-space: pre-wrap; }
+	</style>
+</head>
+<body>
+	<h1>WebGL Ripper engine tests</h1>
+	<canvas id="webgl1" width="96" height="96"></canvas>
+	<canvas id="webgl2" width="96" height="96"></canvas>
+	<canvas id="unity" width="96" height="96"></canvas>
+	<canvas id="viewer" width="96" height="96"></canvas>
+	<canvas id="pick" width="96" height="96"></canvas>
+	<p id="summary">Running…</p>
+	<pre id="log"></pre>
+	<script src="engine-test.js"></script>
+</body>
+</html>

@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper end-to-end page</title>
+</head>
+<body>
+	<!-- A WebGL canvas in the top frame and another one inside a cross-origin iframe -->
+	<canvas id="scene" width="128" height="128"></canvas>
+	<iframe id="frame" width="160" height="160"></iframe>
+	<script src="spinning-cube.js"></script>
+	<script>
+		const frameUrl = new URL('e2e-frame.html', location.href);
+		frameUrl.hostname = location.hostname === 'localhost' ? '127.0.0.1' : 'localhost';
+		document.getElementById('frame').src = frameUrl.href;
+		spinningCube(document.getElementById('scene'), 'webgl');
+	</script>
+</body>
+</html>
