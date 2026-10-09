@@ -128,7 +128,15 @@ reads them (from the recorded setters, a UBO, or `getUniform` as a last resort) 
 (`map`, `_MainTex`, `baseColorTexture`, `u_texture`…), normal, emissive, roughness, metalness, occlusion, and things
 that are not material textures at all (shadow maps, environment maps, LUTs, previous frames) which are skipped.
 Color uniforms (`diffuse`, `u_color`, `_Color`, `baseColorFactor`…) become the material color — but not the color of a
-light (`directionalLights[0].color`). Blending and face culling decide transparency and `doubleSided`.
+light (`directionalLights[0].color`); a draw without one of those takes any other `…Color` uniform (`uPartColor`) that
+isn't a background, wireframe or highlight color. `roughness` and `metalness` uniforms become the material's factors.
+Blending and face culling decide transparency and `doubleSided`.
+
+**Texture transforms.** Optimized glTF files — gltfpack and meshoptimizer output, which AI model generators such as
+Meshy serve — store texture coordinates as 12- or 16-bit integers and stretch them back with `KHR_texture_transform`.
+The raw coordinates of such a model only cover a corner of its texture (1/16 of it for 12 bits), so the base color
+texture's transform is found by the sampler's name and applied to the UVs: `mapTransform` / `uvTransform` (three.js),
+`_MainTex_ST` (Unity), `diffuseMatrix` (Babylon.js), `texture_diffuseMapTransform0/1` (PlayCanvas).
 
 ## Characters in their pose
 
@@ -176,8 +184,9 @@ A frame contains a lot that isn't the model. In this order:
 5. **Normals.** Meshes drawn without normals get smooth ones: face normals are averaged around each position, but only
    between faces less than 60° apart, so hard edges stay hard.
 6. **Backgrounds.** Meshes made of positions only that are drawn from the inside or enclose everything else (sky
-   domes, environment shells) are kept but not selected: the preview shows them with a *background* badge, and
-   without the preview they aren't downloaded.
+   domes, environment shells), and flat see-through quads under the model (the shadow catcher of a model viewer) are
+   kept but not selected: the preview shows them with a *background* badge, and without the preview they aren't
+   downloaded.
 7. **Centering.** Optionally the whole export is moved so it stands on the origin.
 
 ## Textures
@@ -247,6 +256,10 @@ is assembled from `Blob` parts, so geometry and textures aren't copied into one 
 shared by the biggest mesh's draw calls, its lens comes from their projection matrix (perspective field of view,
 aspect, near and far planes, or an orthographic size), and it moves with the model when the export is centered.
 Blender's glTF importer creates it as a camera object, so *Numpad 0* shows the view the page showed.
+
+glTF wants roughness (green) and metalness (blue) in one texture. When a page samples them from two textures (three.js
+reads `roughnessMap.g` and `metalnessMap.b`), the two are packed into one at export, at the size of the larger, so
+neither is lost.
 
 **Smaller GLB** uses `KHR_mesh_quantization`: positions become 16-bit integers around each mesh's center (the node's
 translation and uniform scale put them back), normals 8-bit, UVs 16-bit when they stay within 0..1, colors 8-bit; and

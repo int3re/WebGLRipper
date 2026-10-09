@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { addFailures, checkEditorResults, checkSkinnedResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
+import { addFailures, checkEditorResults, checkOptimizedResults, checkSkinnedResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
 import { build } from '../scripts/build.mjs';
 
 const HEADFUL = process.argv.includes('--headful');
@@ -170,6 +170,17 @@ async function threeTests(bidi, base) {
 	checkSkinnedResults(skinnedResults);
 	report('no uncaught page errors', skinned.errors.length === 0, skinned.errors);
 	await bidi.send('browsingContext.close', { context: skinned.context });
+
+	console.log('\n== Optimized glTF model (tests/optimized.html) ==');
+	const optimized = await openTab(bidi, `${base}/tests/optimized.html`);
+	const optimizedResults = await poll(() => evaluate(bidi, optimized.context, 'window.testResults || null'), 30000);
+	if (!optimizedResults) {
+		report('optimized model capture finished', false, optimized.errors);
+		return;
+	}
+	checkOptimizedResults(optimizedResults);
+	report('no uncaught page errors', optimized.errors.length === 0, optimized.errors);
+	await bidi.send('browsingContext.close', { context: optimized.context });
 }
 
 async function extensionTests(bidi, base, downloadDir) {

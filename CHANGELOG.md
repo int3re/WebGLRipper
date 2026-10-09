@@ -1,5 +1,25 @@
 # Changelog
 
+## 1.3.1
+
+### Fixed
+
+- **Models from AI generators (seen on meshy.ai) lost their texture**: the whole model took its color from one corner
+  of the texture and looked flat and dark. Such models are optimized glTF files whose texture coordinates are stored as
+  12-bit numbers and stretched back by the texture transform; that transform is now applied (three.js `mapTransform` /
+  `uvTransform`, Unity `_MainTex_ST`, Babylon.js `diffuseMatrix`, PlayCanvas `texture_*MapTransform`).
+- The see-through ground under a model (a shadow catcher) was saved as a black square. It is now recognized as a
+  background: offered unselected in the preview, left out without it.
+- Roughness and metalness kept in two separate textures were dropped from GLB files; they are now packed into one
+  metallic-roughness texture, as glTF expects. The material's `roughness` and `metalness` values are exported too
+  (GLB factors, `Pr` / `Pm` in MTL).
+- Parts colored by a uniform with an unusual name (`uPartColor` and the like) came out white; any other "…Color"
+  uniform that isn't a background, wireframe or highlight color is now used when nothing better is found.
+
+### Changed
+
+- The preview shows vertex colors, and the hover highlight is lighter, so it no longer changes how a texture looks.
+
 ## 1.3.0
 
 ### Added

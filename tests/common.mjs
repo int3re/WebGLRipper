@@ -166,6 +166,19 @@ export function checkSkinnedResults(results) {
 	report('camera unknown: the box keeps its place relative to the cylinder (6 to the right)', !!box && near((box.lo[0] + box.hi[0]) / 2, 6), box);
 }
 
+/* tests/optimized.html: a gltfpack-style model (integer positions, 12-bit UVs stretched by the texture transform,
+ * separate roughness and metalness textures) above a shadow catcher. */
+export function checkOptimizedResults(results) {
+	const [mesh] = results.meshes || [];
+	report('optimized model ripped', results.state === 'done' && (results.meshes || []).length === 1, results);
+	report('the shadow catcher under the model is left out as a background', !!results.leftOut && results.leftOut.background === 1, results.leftOut);
+	report('integer positions scaled back: a sphere 2 across', !!mesh && mesh.size.every(v => Math.abs(v - 2) < 0.01), mesh && mesh.size);
+	report('texture coordinates go through the texture transform: 0..1, not 0..0.06', !!mesh &&
+		mesh.uv.lo.every(v => Math.abs(v) < 0.01) && mesh.uv.hi.every(v => Math.abs(v - 1) < 0.01), mesh && mesh.uv);
+	report('separate roughness (G) and metalness (B) textures packed into one, with the factors', !!mesh && !!mesh.metalRough &&
+		Math.abs(mesh.metalRough[1] - 200) <= 2 && Math.abs(mesh.metalRough[2] - 50) <= 2 && mesh.roughness === 1 && mesh.metalness === 1, mesh);
+}
+
 /* Checks the .glb from the pick + preview end-to-end test: just the cube, textured, standing on the origin. */
 export function checkPickedCube(label, buffer) {
 	try {

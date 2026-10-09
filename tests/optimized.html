@@ -1,0 +1,140 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper optimized glTF test</title>
+	<!--
+		A model the way optimized glTF files (gltfpack / meshoptimizer, as served by AI model generators) arrive in a
+		three.js viewer: integer positions scaled back by the node, 8-bit normals, 12-bit texture coordinates that the
+		texture transform (KHR_texture_transform → mapTransform) stretches back to 0..1, roughness and metalness in two
+		separate textures, and a see-through shadow catcher under the model.
+	-->
+	<script>
+		window.__WEBGLRIPPER_TEST__ = {
+			downloads: [],
+			onDownload(name, blob) { this.downloads.push({ name, blob }); }
+		};
+	</script>
+	<script src="../webglripper.js"></script>
+	<script type="importmap">
+		{ "imports": {
+			"three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+			"three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+		} }
+	</script>
+</head>
+<body style="margin:0">
+	<pre id="log"></pre>
+	<script type="module">
+		import * as THREE from 'three';
+		import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+		const renderer = new THREE.WebGLRenderer({ antialias: false });
+		renderer.setSize(480, 320);
+		renderer.shadowMap.enabled = true;
+		document.body.prepend(renderer.domElement);
+		const scene = new THREE.Scene();
+		const camera = new THREE.PerspectiveCamera(45, 480 / 320, 0.1, 100);
+		camera.position.set(0, 1.5, 5);
+		camera.lookAt(0, 0, 0);
+		const light = new THREE.DirectionalLight(0xffffff, 2);
+		light.position.set(2, 5, 3);
+		light.castShadow = true;
+		scene.add(light, new THREE.AmbientLight(0xffffff, 0.5));
+
+		// Quantized geometry: 16-bit integer positions, 8-bit normals, 12-bit UVs read as normalized 16-bit values
+		const source = new THREE.SphereGeometry(1, 24, 12);
+		const geometry = new THREE.BufferGeometry();
+		const p = source.attributes.position.array, n = source.attributes.normal.array, t = source.attributes.uv.array;
+		geometry.setAttribute('position', new THREE.BufferAttribute(Uint16Array.from(p, v => Math.round((v + 1) * 30000)), 3));
+		geometry.setAttribute('normal', new THREE.BufferAttribute(Int8Array.from(n, v => Math.round(v * 127)), 3, true));
+		geometry.setAttribute('uv', new THREE.BufferAttribute(Uint16Array.from(t, v => Math.round(v * 4095)), 2, true));
+		geometry.setIndex(source.index);
+
+		const texture = (fill) => {
+			const size = 32, data = new Uint8Array(size * size * 4);
+			for (let y = 0; y < size; y++)
+				for (let x = 0; x < size; x++)
+					data.set(fill(x / size, y / size), (y * size + x) * 4);
+			const tex = new THREE.DataTexture(data, size, size);
+			tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+			tex.repeat.set(65535 / 4095, 65535 / 4095); // what KHR_texture_transform does for 12-bit UVs
+			tex.needsUpdate = true;
+			return tex;
+		};
+		// base color: red on the left half of the image, blue on the right
+		const map = texture((u) => (u < 0.5 ? [220, 40, 40, 255] : [40, 60, 220, 255]));
+		map.colorSpace = THREE.SRGBColorSpace;
+		const roughnessMap = texture(() => [0, 200, 0, 255]);   // three.js reads roughness from G
+		const metalnessMap = texture(() => [0, 0, 50, 255]);    // and metalness from B
+		const model = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map, roughnessMap, metalnessMap, roughness: 1, metalness: 1 }));
+		model.scale.setScalar(1 / 30000);
+		model.position.set(-1, -1, -1);
+		model.castShadow = true;
+		const catcher = new THREE.Mesh(new THREE.PlaneGeometry(6, 6), new THREE.ShadowMaterial({ opacity: 0.37 }));
+		catcher.rotation.x = -Math.PI / 2;
+		catcher.position.y = -1;
+		catcher.receiveShadow = true;
+		scene.add(model, catcher);
+		renderer.setAnimationLoop(() => renderer.render(scene, camera));
+
+		async function capture(settings) {
+			const T = window.__WEBGLRIPPER_TEST__;
+			T.downloads.length = 0;
+			const done = new Promise(resolve => {
+				document.addEventListener('webglripper:ext', function listener(event) {
+					const message = JSON.parse(event.detail);
+					if (message.type === 'state' && ['done', 'error', 'idle'].includes(message.state)) {
+						document.removeEventListener('webglripper:ext', listener);
+						resolve(message);
+					}
+				});
+			});
+			document.dispatchEvent(new CustomEvent('webglripper:page', {
+				detail: JSON.stringify({ type: 'capture', settings: { export_format: 'glb', show_preview: false, center_model: false, __version: 'test', ...settings } })
+			}));
+			return done;
+		}
+
+		async function run() {
+			await new Promise(r => setTimeout(r, 600));
+			const message = await capture({});
+			const file = window.__WEBGLRIPPER_TEST__.downloads.find(d => d.name.endsWith('.glb'));
+			const results = { state: message.state, text: message.text, leftOut: message.result && message.result.leftOut, meshes: [] };
+			if (file) {
+				const gltf = await new GLTFLoader().parseAsync(await file.blob.arrayBuffer(), '');
+				const pixel = (tex) => {
+					const canvas = document.createElement('canvas');
+					canvas.width = tex.image.width;
+					canvas.height = tex.image.height;
+					const context = canvas.getContext('2d');
+					context.drawImage(tex.image, 0, 0);
+					return Array.from(context.getImageData(canvas.width >> 1, canvas.height >> 1, 1, 1).data);
+				};
+				gltf.scene.traverse(object => {
+					if (!object.isMesh)
+						return;
+					const uv = object.geometry.attributes.uv;
+					const lo = [Infinity, Infinity], hi = [-Infinity, -Infinity];
+					for (let i = 0; i < (uv ? uv.count : 0); i++) {
+						lo[0] = Math.min(lo[0], uv.getX(i)); hi[0] = Math.max(hi[0], uv.getX(i));
+						lo[1] = Math.min(lo[1], uv.getY(i)); hi[1] = Math.max(hi[1], uv.getY(i));
+					}
+					object.geometry.computeBoundingBox();
+					const box = object.geometry.boundingBox.clone().applyMatrix4(object.matrixWorld);
+					const m = object.material;
+					results.meshes.push({
+						uv: { lo: lo.map(v => +v.toFixed(3)), hi: hi.map(v => +v.toFixed(3)) },
+						size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z].map(v => +v.toFixed(3)),
+						map: !!m.map, roughness: m.roughness, metalness: m.metalness,
+						metalRough: m.roughnessMap && m.roughnessMap === m.metalnessMap ? pixel(m.roughnessMap) : null
+					});
+				});
+			}
+			window.testResults = results;
+			document.getElementById('log').textContent = JSON.stringify(results, null, 2);
+		}
+		run();
+	</script>
+</body>
+</html>

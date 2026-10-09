@@ -181,13 +181,16 @@ const VERTEX_SHADER = `#version 300 es
 layout(location = 0) in vec3 position;
 layout(location = 1) in vec3 normal;
 layout(location = 2) in vec2 uv;
+layout(location = 3) in vec3 vertexColor;
 uniform mat4 viewProjection;
 uniform float flipV;
 out vec3 vNormal;
 out vec2 vUv;
 out vec3 vPosition;
+out vec3 vColor;
 void main() {
 	vNormal = normal;
+	vColor = vertexColor;
 	vUv = vec2(uv.x, flipV > 0.5 ? 1.0 - uv.y : uv.y);
 	vPosition = position;
 	gl_Position = viewProjection * vec4(position, 1.0);
@@ -198,8 +201,10 @@ precision highp float;
 in vec3 vNormal;
 in vec2 vUv;
 in vec3 vPosition;
+in vec3 vColor;
 uniform sampler2D map;
 uniform float useMap;
+uniform float useColors;
 uniform float hasNormals;
 uniform vec4 color;
 uniform vec3 eye;
@@ -220,6 +225,8 @@ void main() {
 		n = -n;
 	float light = max(dot(n, normalize(toEye + vec3(0.25, 0.6, 0.2))), 0.0);
 	vec4 base = color * (useMap > 0.5 ? texture(map, vUv) : vec4(1.0));
+	if (useColors > 0.5)
+		base.rgb *= pow(clamp(vColor, 0.0, 1.0), vec3(1.0 / 2.2)); // vertex colors are linear, like material colors
 	vec3 lit = base.rgb * (0.38 + 0.72 * light);
 	outColor = vec4(mix(lit, tint, tintAmount), alpha);
 }`;
@@ -257,7 +264,7 @@ class View {
 			return;
 		}
 		this.uniforms = {};
-		for (const name of ['viewProjection', 'flipV', 'map', 'useMap', 'hasNormals', 'color', 'eye', 'tint', 'tintAmount', 'alpha', 'idColor', 'idPass'])
+		for (const name of ['viewProjection', 'flipV', 'map', 'useMap', 'useColors', 'hasNormals', 'color', 'eye', 'tint', 'tintAmount', 'alpha', 'idColor', 'idPass'])
 			this.uniforms[name] = gl.getUniformLocation(program, name);
 
 		for (const [index, mesh] of data.meshes.entries())
@@ -284,6 +291,7 @@ class View {
 		attribute(0, mesh.positions, 3);
 		attribute(1, mesh.normals, 3);
 		attribute(2, mesh.uvs, 2);
+		attribute(3, mesh.colors, 3);
 		const indices = gl.createBuffer();
 		gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER, indices);
 		gl.bufferData(gl.ELEMENT_ARRAY_BUFFER, mesh.triangles, gl.STATIC_DRAW);
@@ -452,6 +460,7 @@ class View {
 		const color = (source.color || [0.6, 0.6, 0.62, 1]).map(srgb);
 		gl.uniform4f(u.color, color[0], color[1], color[2], 1);
 		gl.uniform1f(u.useMap, mesh.texture ? 1 : 0);
+		gl.uniform1f(u.useColors, source.colors ? 1 : 0);
 		gl.uniform1f(u.hasNormals, source.normals ? 1 : 0);
 		gl.uniform1f(u.alpha, alpha);
 		gl.uniform1f(u.tintAmount, tintAmount);
@@ -486,7 +495,7 @@ class View {
 
 		for (const mesh of this.meshes) {
 			if (mesh.source.selected)
-				this.drawMesh(mesh, 1, mesh.index === this.hover ? 0.35 : 0);
+				this.drawMesh(mesh, 1, mesh.index === this.hover ? 0.2 : 0); // light enough not to change how the colors look
 		}
 		gl.enable(gl.BLEND);
 		gl.blendFunc(gl.SRC_ALPHA, gl.ONE_MINUS_SRC_ALPHA);
@@ -494,6 +503,7 @@ class View {
 		// ground grid
 		gl.uniform4f(u.color, 1, 1, 1, 1);
 		gl.uniform1f(u.useMap, 0);
+		gl.uniform1f(u.useColors, 0);
 		gl.uniform1f(u.hasNormals, 0);
 		gl.uniform1f(u.tintAmount, 1);
 		gl.uniform3f(u.tint, 0.55, 0.58, 0.64);

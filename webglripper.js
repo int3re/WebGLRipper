@@ -121,7 +121,7 @@ const GL = {
 
 	CURRENT_PROGRAM: 0x8B8D, ACTIVE_UNIFORMS: 0x8B86, ACTIVE_ATTRIBUTES: 0x8B89, LINK_STATUS: 0x8B82,
 	VERTEX_SHADER: 0x8B31, FRAGMENT_SHADER: 0x8B30,
-	FLOAT_VEC3: 0x8B51, FLOAT_VEC4: 0x8B52, FLOAT_MAT4: 0x8B5C, SAMPLER_2D: 0x8B5E,
+	FLOAT_VEC3: 0x8B51, FLOAT_VEC4: 0x8B52, FLOAT_MAT3: 0x8B5B, FLOAT_MAT4: 0x8B5C, SAMPLER_2D: 0x8B5E,
 	UNIFORM_BLOCK_INDEX: 0x8A3A, UNIFORM_OFFSET: 0x8A3B, UNIFORM_ARRAY_STRIDE: 0x8A3C,
 	UNIFORM_MATRIX_STRIDE: 0x8A3D, UNIFORM_IS_ROW_MAJOR: 0x8A3E, UNIFORM_BLOCK_BINDING: 0x8A3F,
 
@@ -427,6 +427,10 @@ function recordUniform(gl, location, size, data, offset, length, transpose) {
 	const start = offset || 0;
 	const end = length ? start + length : data.length;
 	const store = session.uniformStore(info.program);
+	if (transpose && size !== 16) {
+		store.delete(`${info.base}#${info.index}`); // rare: read back with getUniform instead
+		return;
+	}
 	for (let i = 0; start + (i + 1) * size <= end; i++) {
 		const key = `${info.base}#${info.index + i}`;
 		if (size === 1) {
@@ -441,10 +445,13 @@ function recordUniform(gl, location, size, data, offset, length, transpose) {
 const CAPTURE_UNIFORM_HOOKS = {
 	uniform1i: (gl, a) => recordUniform(gl, a[0], 1, [a[1]]),
 	uniform1iv: (gl, a) => recordUniform(gl, a[0], 1, a[1], a[2], a[3]),
+	uniform1f: (gl, a) => recordUniform(gl, a[0], 1, [a[1]]),
+	uniform1fv: (gl, a) => recordUniform(gl, a[0], 1, a[1], a[2], a[3]),
 	uniform3f: (gl, a) => recordUniform(gl, a[0], 3, [a[1], a[2], a[3]]),
 	uniform3fv: (gl, a) => recordUniform(gl, a[0], 3, a[1], a[2], a[3]),
 	uniform4f: (gl, a) => recordUniform(gl, a[0], 4, [a[1], a[2], a[3], a[4]]),
 	uniform4fv: (gl, a) => recordUniform(gl, a[0], 4, a[1], a[2], a[3]),
+	uniformMatrix3fv: (gl, a) => recordUniform(gl, a[0], 9, a[2], a[3], a[4], a[1]),
 	uniformMatrix4fv: (gl, a) => recordUniform(gl, a[0], 16, a[2], a[3], a[4], a[1])
 };
 
@@ -647,7 +654,15 @@ const COLOR_UNIFORM_NAMES = {
 	emissive: new Set(['emissive', 'emissivecolor', 'vemissivecolor', 'materialemissive', 'emission', 'emissioncolor'])
 };
 
-/* Returns 'base' | 'emissive' | null for vec3/vec4 uniforms that hold a material color. */
+/* Words that make a "...Color" uniform something else than the color of the surface. */
+const NOT_SURFACE_COLOR = new Set(['light', 'lights', 'lamp', 'fog', 'shadow', 'ambient', 'specular', 'spec', 'sheen', 'attenuation',
+	'outline', 'wire', 'wireframe', 'line', 'edge', 'grid', 'background', 'bg', 'clear', 'sky', 'env', 'rim', 'fresnel', 'highlight',
+	'hover', 'select', 'selected', 'selection', 'pick', 'id', 'ao', 'fade', 'transmission', 'glow', 'border', 'stroke', 'text', 'font',
+	'label', 'cursor', 'halo', 'reflect', 'reflection', 'horizon', 'ground', 'top', 'bottom', 'start', 'end', 'from', 'to', 'clip',
+	'gradient', 'vignette', 'overlay', 'debug', 'emissive', 'emission', 'specular', 'absorption', 'scatter', 'scattering']);
+
+/* Returns 'base' | 'emissive' | 'other' | null for vec3/vec4 uniforms that hold a material color. 'other' is any
+ * other "...Color" (uPartColor, segmentColor): used only when a draw has no known color uniform. */
 function classifyColorUniform(name) {
 	// directionalLights[0].color and the like: the color of a light, not of the material
 	const owner = String(name).match(/^(.*)\.[^.]*$/);
@@ -659,6 +674,9 @@ function classifyColorUniform(name) {
 		if (candidates.some(c => COLOR_UNIFORM_NAMES[role].has(c)))
 			return role;
 	}
+	const tokens = nameTokens(String(name).replace(/^.*\./, ''));
+	if (/^colou?r$/.test(tokens[tokens.length - 1] || '') && !tokens.some(t => NOT_SURFACE_COLOR.has(t)))
+		return 'other';
 	return null;
 }
 
@@ -791,6 +809,43 @@ function classifyMatrix(name, extraNames) {
 	if (candidates.some(c => MVP_MATRIX_NAMES.has(c)))
 		return 'mvp';
 	return null;
+}
+
+/* Float uniforms that hold a material's roughness or metalness (three.js, PlayCanvas, glTF-style names). */
+const ROUGHNESS_NAMES = new Set(['roughness', 'roughnessfactor', 'uroughness', 'materialroughness']);
+const METALNESS_NAMES = new Set(['metalness', 'metallic', 'metallicfactor', 'metalnessfactor', 'umetalness', 'umetallic', 'materialmetalness']);
+
+function classifyFactor(name) {
+	const s = String(name).replace(/^.*\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
+	return ROUGHNESS_NAMES.has(s) ? 'roughness' : METALNESS_NAMES.has(s) ? 'metalness' : null;
+}
+
+/* The uniform a texture's coordinates are transformed with, found by the sampler's name. Optimized glTF files
+ * (gltfpack, meshoptimizer) store UVs as small integers and scale them back with KHR_texture_transform, so without
+ * it a model samples only a corner of its texture. `uniforms` maps names to { type }. */
+function uvTransformUniform(sampler, uniforms) {
+	const is = (name, type) => uniforms.has(name) && uniforms.get(name).type === type;
+	if (is(`${sampler}Transform`, GL.FLOAT_MAT3))                // three.js r151+: mapTransform, normalMapTransform…
+		return { kind: 'mat3', names: [`${sampler}Transform`] };
+	if (sampler === 'map' && is('uvTransform', GL.FLOAT_MAT3))    // older three.js
+		return { kind: 'mat3', names: ['uvTransform'] };
+	if (is(`${sampler}_ST`, GL.FLOAT_VEC4))                       // Unity: _MainTex_ST = scale xy, offset zw
+		return { kind: 'st', names: [`${sampler}_ST`] };
+	const babylon = /^(.+)Sampler$/.exec(sampler);                // Babylon.js: diffuseSampler and diffuseMatrix
+	if (babylon && is(`${babylon[1]}Matrix`, GL.FLOAT_MAT4))
+		return { kind: 'mat4', names: [`${babylon[1]}Matrix`] };
+	if (is(`${sampler}Transform0`, GL.FLOAT_VEC3) && is(`${sampler}Transform1`, GL.FLOAT_VEC3)) // PlayCanvas rows
+		return { kind: 'rows', names: [`${sampler}Transform0`, `${sampler}Transform1`] };
+	return null;
+}
+
+/* uv' = (a·u + c·v + e, b·u + d·v + f) for m = [a, b, c, d, e, f] */
+function transformUVs(uvs, m) {
+	for (let i = 0; i < uvs.length; i += 2) {
+		const u = uvs[i], v = uvs[i + 1];
+		uvs[i] = m[0] * u + m[2] * v + m[4];
+		uvs[i + 1] = m[1] * u + m[3] * v + m[5];
+	}
 }
 
 /* Picks one texture per MTL slot. The best diffuse candidate wins map_Kd; leftovers are kept as extras. */
@@ -1208,8 +1263,9 @@ class ContextCapture {
 			return info;
 		const g = this.g;
 		const names = this.session.settings.names;
-		info = { attribs: {}, attributeNames: [], samplers: [], colors: {}, model: null, modelView: null, view: null,
-			projection: null, viewProjection: null, mvp: null };
+		info = { attribs: {}, attributeNames: [], samplers: [], colors: {}, factors: {}, uvTransforms: {}, model: null, modelView: null,
+			view: null, projection: null, viewProjection: null, mvp: null };
+		const uniforms = new Map(); // name -> { type, active, index }
 
 		const attributeCount = g.getProgramParameter(program, GL.ACTIVE_ATTRIBUTES) || 0;
 		for (let i = 0; i < attributeCount; i++) {
@@ -1237,6 +1293,14 @@ class ContextCapture {
 				continue;
 			if (ANIMATED_NAME.test(active.name))
 				info.animated = true;
+			uniforms.set(active.name.replace(/\[0\]$/, ''), { type: active.type, active, index: i });
+			if (active.type === GL.FLOAT && active.size === 1) {
+				const role = classifyFactor(active.name);
+				const location = role && !info.factors[role] && g.getUniformLocation(program, active.name);
+				if (location)
+					info.factors[role] = { location, base: active.name };
+				continue;
+			}
 			if (active.type === GL.SAMPLER_2D) {
 				const location = g.getUniformLocation(program, active.name);
 				if (!location)
@@ -1262,6 +1326,22 @@ class ContextCapture {
 			const source = this.matrixSource(program, active, i);
 			if (source)
 				info[role] = { ...source, name: active.name, base: active.name.replace(/\[0\]$/, '') };
+		}
+
+		for (const sampler of info.samplers) {
+			const found = uvTransformUniform(sampler.name, uniforms);
+			if (!found)
+				continue;
+			if (found.kind === 'mat4') {
+				const { active, index } = uniforms.get(found.names[0]);
+				const source = this.matrixSource(program, active, index); // Babylon.js keeps these in a uniform block
+				if (source)
+					info.uvTransforms[sampler.name] = { kind: 'mat4', source, name: found.names[0] };
+			} else {
+				const locations = found.names.map(name => g.getUniformLocation(program, name));
+				if (locations.every(Boolean))
+					info.uvTransforms[sampler.name] = { kind: found.kind, names: found.names, locations, name: found.names[0] };
+			}
 		}
 
 		this.programs.set(program, info);
@@ -1315,6 +1395,47 @@ class ContextCapture {
 		if (!value || !(value.length >= 3))
 			return null;
 		return [value[0], value[1], value[2], value.length > 3 ? value[3] : 1].map(c => (Number.isFinite(c) ? c : 0));
+	}
+
+	readFactor(program, source) {
+		if (!source)
+			return null;
+		// uniform1f(v) is recorded, so a value read back once stays valid for the frame
+		const value = this.uniformValue(program, source.base, 0, source.location, true);
+		const n = typeof value === 'number' ? value : value && value[0];
+		return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : null;
+	}
+
+	/* The coordinate transform of the base color texture (or else of any texture that has one) as
+	 * [a, b, c, d, e, f], see transformUVs; null when there is none or it does nothing. */
+	uvTransform(program, info, textures) {
+		const transforms = info.uvTransforms;
+		const texture = textures.find(t => t.slot === 'map_Kd' && transforms[t.uniform]) || textures.find(t => transforms[t.uniform]);
+		if (!texture)
+			return null;
+		const t = transforms[texture.uniform];
+		const value = (i) => this.uniformValue(program, t.names[i], 0, t.locations[i], true); // setters are recorded
+		let m = null;
+		if (t.kind === 'mat3') {
+			const v = value(0);
+			if (v && v.length >= 9)
+				m = [v[0], v[1], v[3], v[4], v[6], v[7]];
+		} else if (t.kind === 'st') {
+			const v = value(0);
+			if (v && v.length >= 4)
+				m = [v[0], 0, 0, v[1], v[2], v[3]];
+		} else if (t.kind === 'rows') {
+			const a = value(0), b = value(1);
+			if (a && b && a.length >= 3 && b.length >= 3)
+				m = [a[0], b[0], a[1], b[1], a[2], b[2]];
+		} else {
+			const v = this.readMatrix(program, t.source);
+			if (v)
+				m = [v[0], v[1], v[4], v[5], v[8], v[9]];
+		}
+		if (!m || !m.every(Number.isFinite) || m.every((x, i) => Math.abs(x - [1, 0, 0, 1, 0, 0][i]) < 1e-7))
+			return null;
+		return { m, name: t.name };
 	}
 
 	readMatrix(program, source) {
@@ -1803,8 +1924,10 @@ class ContextCapture {
 			geometryKey,
 			matrix,
 			textures,
-			color: this.readColor(program, info.colors.base),
+			color: this.readColor(program, info.colors.base) || this.readColor(program, info.colors.other),
 			emissive: this.readColor(program, info.colors.emissive),
+			roughness: this.readFactor(program, info.factors.roughness),
+			metalness: this.readFactor(program, info.factors.metalness),
 			blend: g.isEnabled(GL.BLEND),
 			doubleSided: !culling,
 			insideOut,
@@ -1822,9 +1945,17 @@ class ContextCapture {
 				normal: normal ? info.attribs.normal.name : null,
 				uv: uv ? info.attribs.uv.name : null,
 				color: color ? info.attribs.color.name : null,
-				matrix: info.model ? info.model.name : info.modelView ? info.modelView.name : null
+				matrix: info.model ? info.model.name : info.modelView ? info.modelView.name : null,
+				uvTransform: null
 			}
 		};
+		if (mesh.uvs) {
+			const transform = this.uvTransform(program, info, textures);
+			if (transform) {
+				transformUVs(mesh.uvs, transform.m);
+				mesh.program.uvTransform = transform.name;
+			}
+		}
 		if (replaces)
 			s.meshes[s.meshes.indexOf(replaces)] = mesh;
 		else
@@ -2875,9 +3006,12 @@ function markBackgrounds(meshes) {
 		return { lo, hi };
 	});
 	const candidates = meshes.map(mesh => !mesh.hadNormals && !mesh.uvs && !mesh.colors && mesh.textures.length === 0 && mesh.vertexCount >= 8);
+	// A flat, untextured, see-through quad under everything else: the shadow catcher or ground of a model viewer
+	const grounds = meshes.map((mesh, i) => mesh.blend && mesh.triangles.length <= 6 && mesh.textures.length === 0 &&
+		boxes[i].hi[1] - boxes[i].lo[1] <= 1e-4 * Math.max(boxes[i].hi[0] - boxes[i].lo[0], boxes[i].hi[2] - boxes[i].lo[2]));
 	const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
 	meshes.forEach((mesh, i) => {
-		if (candidates[i])
+		if (candidates[i] || grounds[i])
 			return;
 		for (let k = 0; k < 3; k++) {
 			lo[k] = Math.min(lo[k], boxes[i].lo[k]);
@@ -2887,6 +3021,10 @@ function markBackgrounds(meshes) {
 	if (!(lo[0] <= hi[0]))
 		return; // nothing but candidates: keep them all
 	const size = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]);
+	meshes.forEach((mesh, i) => {
+		if (grounds[i] && boxes[i].hi[1] <= lo[1] + 0.02 * size)
+			mesh.background = true;
+	});
 	meshes.forEach((mesh, i) => {
 		if (!candidates[i])
 			return;
@@ -3314,6 +3452,72 @@ async function readTexturePNG(entry, unflip) {
 	}
 }
 
+/* glTF keeps roughness (G) and metalness (B) in one texture. Pages that sample them from two (three.js reads
+ * roughnessMap.g and metalnessMap.b) get them packed into one, at the size of the larger. Returns material -> entry. */
+async function packMetalRough(meshes, firstIndex, progress) {
+	const packed = new Map();
+	if (typeof native.createImageBitmap !== 'function')
+		return packed;
+	const pairs = new Map();
+	for (const material of new Set(meshes.map(mesh => mesh.material))) {
+		const rough = material.slots.find(t => t.slot === 'map_Pr'), metal = material.slots.find(t => t.slot === 'map_Pm');
+		if ((!rough && !metal) || (rough && metal && rough.entry === metal.entry))
+			continue;
+		const key = `${rough ? rough.entry.index : '-'}|${metal ? metal.entry.index : '-'}`;
+		if (!pairs.has(key)) {
+			progress(tr('Packing roughness and metalness…'));
+			pairs.set(key, await packChannels(rough && rough.entry, metal && metal.entry, firstIndex + pairs.size));
+		}
+		if (pairs.get(key))
+			packed.set(material, pairs.get(key));
+	}
+	return packed;
+}
+
+async function packChannels(rough, metal, index) {
+	const sources = [rough, metal].filter(Boolean);
+	const width = Math.max(...sources.map(entry => entry.png.width));
+	const height = Math.max(...sources.map(entry => entry.png.height));
+	const pixels = async (entry) => {
+		if (!entry)
+			return null;
+		const bitmap = await native.createImageBitmap(entry.png.blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none',
+			resizeWidth: width, resizeHeight: height, resizeQuality: 'high' });
+		const canvas = apply(native.createElement, document, ['canvas']);
+		canvas.width = width;
+		canvas.height = height;
+		try {
+			const context = canvas.getContext('2d', { willReadFrequently: true });
+			context.drawImage(bitmap, 0, 0);
+			return context.getImageData(0, 0, width, height).data;
+		} finally {
+			bitmap.close();
+			canvas.width = canvas.height = 0;
+		}
+	};
+	try {
+		const r = await pixels(rough);
+		const m = await pixels(metal);
+		const rgba = new Uint8Array(width * height * 4);
+		for (let i = 0; i < rgba.length; i += 4) {
+			rgba[i] = 255;
+			rgba[i + 1] = r ? r[i + 1] : 255;
+			rgba[i + 2] = m ? m[i + 2] : 255;
+			rgba[i + 3] = 255;
+		}
+		const data = new BlobCollector();
+		let crc = -1;
+		await encodePNG(width, height, (start, count) => rgba.subarray(start * width * 4, (start + count) * width * 4), false, async (bytes) => {
+			crc = crc32Update(crc, bytes);
+			data.push(bytes);
+		});
+		return { index, png: { blob: data.toBlob('image/png'), crc: (crc ^ -1) >>> 0, width, height, opaque: true } };
+	} catch (err) {
+		log('Packing roughness and metalness failed:', err);
+		return null;
+	}
+}
+
 /* Materials are shared by meshes that use the same textures, color and render state. */
 function buildMaterials(meshes) {
 	const clamp = (c) => Math.min(Math.max(c, 0), 1);
@@ -3322,10 +3526,12 @@ function buildMaterials(meshes) {
 		const slots = mesh.textures.filter(t => t.entry && t.entry.png);
 		const color = mesh.color ? mesh.color.map(clamp) : null;
 		const emissive = mesh.emissive && mesh.emissive.slice(0, 3).some(c => c > 0) ? mesh.emissive.slice(0, 3).map(clamp) : null;
-		const signature = [slots.map(t => `${t.slot}=${t.entry.index}`).join(';'), color, emissive, mesh.blend, mesh.doubleSided].join('|');
+		const signature = [slots.map(t => `${t.slot}=${t.entry.index}`).join(';'), color, emissive, mesh.blend, mesh.doubleSided,
+			mesh.roughness, mesh.metalness].join('|');
 		let material = materials.get(signature);
 		if (!material) {
-			material = { name: `mat_${pad(materials.size, meshes.length)}`, slots, color, emissive, blend: mesh.blend, doubleSided: mesh.doubleSided };
+			material = { name: `mat_${pad(materials.size, meshes.length)}`, slots, color, emissive, blend: mesh.blend, doubleSided: mesh.doubleSided,
+				roughness: mesh.roughness, metalness: mesh.metalness };
 			materials.set(signature, material);
 		}
 		mesh.material = material;
@@ -3481,14 +3687,17 @@ function buildGLB(meshes, flipV, extras, options = {}) {
 		const base = slot('map_Kd'), normal = slot('map_Bump'), emissive = slot('map_Ke');
 		const roughness = slot('map_Pr'), metalness = slot('map_Pm');
 		const occlusion = material.slots.find(t => t.slot === 'extra' && /occlu|(^|[^a-z])ao/i.test(t.uniform));
-		const pbr = { baseColorFactor: material.color || [1, 1, 1, 1], metallicFactor: 0, roughnessFactor: 1 };
+		const pbr = { baseColorFactor: material.color || [1, 1, 1, 1], metallicFactor: material.metalness ?? 0, roughnessFactor: material.roughness ?? 1 };
 		const out = { name: material.name, pbrMetallicRoughness: pbr, doubleSided: !!material.doubleSided };
 		if (base)
 			pbr.baseColorTexture = { index: textureOf(base) };
-		// glTF packs roughness (G) and metalness (B) in one texture, which is how three.js samples them too
-		if (roughness && metalness && roughness.entry === metalness.entry) {
-			pbr.metallicRoughnessTexture = { index: textureOf(roughness) };
-			pbr.metallicFactor = 1;
+		// glTF packs roughness (G) and metalness (B) in one texture, which is how three.js samples them too; separate
+		// textures were packed into one before (packMetalRough)
+		const packed = roughness && metalness && roughness.entry === metalness.entry ? roughness.entry
+			: options.packed && options.packed.get(material);
+		if (packed) {
+			pbr.metallicRoughnessTexture = { index: textureOf({ entry: packed }) };
+			pbr.metallicFactor = material.metalness ?? 1;
 		}
 		if (normal)
 			out.normalTexture = { index: textureOf(normal) };
@@ -3850,6 +4059,10 @@ async function writeOBJ(meshes, textures, settings, output, prefix, zip, encoder
 		mtl.push('', `newmtl ${material.name}`);
 		const color = material.color || (material.slots.some(t => t.slot === 'map_Kd') ? [1, 1, 1, 1] : [0.8, 0.8, 0.8, 1]);
 		mtl.push(`Kd ${color.slice(0, 3).map(number).join(' ')}`, 'Ka 0 0 0', 'Ks 0 0 0', `d ${number(color[3])}`, 'illum 1');
+		if (material.roughness != null)
+			mtl.push(`Pr ${number(material.roughness)}`);
+		if (material.metalness != null)
+			mtl.push(`Pm ${number(material.metalness)}`);
 		if (material.emissive)
 			mtl.push(`Ke ${material.emissive.map(number).join(' ')}`);
 		for (const t of material.slots) {
@@ -3934,9 +4147,10 @@ async function writeExport(capture, scene, meshes, format, progress, compact = c
 		output.count++;
 	}
 	if (wantGLB) {
-		const jpegs = compact ? await jpegTextures(textures, progress) : null;
+		const packed = await packMetalRough(meshes, textures.length, progress);
+		const jpegs = compact ? await jpegTextures(textures.concat(Array.from(new Set(packed.values()))), progress) : null;
 		progress(tr('Building {format}…', { format: 'GLB' }));
-		const glb = buildGLB(meshes, settings.unflip, extras, { camera, quantize: compact, jpegs });
+		const glb = buildGLB(meshes, settings.unflip, extras, { camera, quantize: compact, jpegs, packed });
 		if (zip) {
 			const file = output.open('model.glb', true);
 			await pipeBlob(glb, file.write);
@@ -4014,6 +4228,7 @@ function previewMesh(capture, mesh) {
 		positions: mesh.positions,
 		normals: mesh.normals,
 		uvs: mesh.uvs,
+		colors: mesh.colors,
 		triangles: mesh.triangles,
 		vertexCount: mesh.vertexCount,
 		triangleCount: mesh.triangleCount,
@@ -4360,6 +4575,7 @@ if (testHook) {
 	testHook.internals = {
 		classifyAttribute, classifyTexture, classifyMatrix, normalizeSettings, triangulate, compactVertices,
 		halfToFloat, invert4, multiply4, normalMatrix, crc32, encodePNG, ZipBuilder, formatNumber, classifyColorUniform,
+		classifyFactor, uvTransformUniform, transformUVs,
 		isRenderTarget: (texture) => renderTargetTextures.has(texture), dedupeRows,
 		status: () => status
 	};

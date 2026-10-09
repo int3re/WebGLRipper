@@ -54,6 +54,7 @@ const WEBGLRIPPER_LOCALES = {
 		'Writing mesh {n} of {total}…': 'Записываю меш {n} из {total}…',
 		'Building {format}…': 'Собираю {format}…',
 		'Packing .zip…': 'Упаковываю .zip…',
+		'Packing roughness and metalness…': 'Объединяю карты шероховатости и металличности…',
 		'No WebGL content in this frame.': 'В этом фрейме нет WebGL-контента.',
 		'This browser is too old: CompressionStream is not supported.': 'Браузер слишком старый: нет поддержки CompressionStream.',
 		'Waiting for the next frame…': 'Жду следующий кадр…',

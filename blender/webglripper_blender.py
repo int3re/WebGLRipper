@@ -13,7 +13,7 @@
 bl_info = {
 	"name": "WebGL Ripper",
 	"author": "WebGL Ripper contributors",
-	"version": (1, 3, 0),
+	"version": (1, 3, 1),
 	"blender": (3, 6, 0),
 	"location": "3D View > Sidebar > WebGL Ripper",
 	"description": "Imports new WebGL Ripper downloads (GLB, STL, USDZ, OBJ zip) automatically",

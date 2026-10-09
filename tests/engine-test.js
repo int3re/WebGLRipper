@@ -102,6 +102,22 @@ function unitTests() {
 	check('color: material struct member', color('material.baseColor') === 'base' && color('u_material.emissive') === 'emissive');
 	check('color: light colors are not material colors', color('directionalLights[0].color') === null &&
 		color('pointLights[2].color') === null && color('u_light.color') === null && color('fogColor') === null);
+	check('color: any other surface color as a fallback, not backgrounds or wireframes', color('uPartColor') === 'other' &&
+		color('segmentColor') === 'other' && color('uBgColor1') === null && color('wireframeColor') === null && color('uHighlightColor') === null);
+
+	const factor = (n) => I.classifyFactor(n);
+	check('factors: roughness and metalness uniforms', factor('roughness') === 'roughness' && factor('metalness') === 'metalness' &&
+		factor('material_metalness') === 'metalness' && factor('u_roughnessIntensity') === null);
+	const types = (entries) => new Map(entries.map(([name, type]) => [name, { type }]));
+	const MAT3 = 0x8B5B, MAT4 = 0x8B5C, VEC3 = 0x8B51, VEC4 = 0x8B52;
+	const uvt = (sampler, entries) => { const t = I.uvTransformUniform(sampler, types(entries)); return t && `${t.kind}:${t.names.join(',')}`; };
+	check('uv transforms: three.js, Unity, Babylon.js, PlayCanvas', uvt('map', [['mapTransform', MAT3]]) === 'mat3:mapTransform' &&
+		uvt('map', [['uvTransform', MAT3]]) === 'mat3:uvTransform' && uvt('normalMap', [['uvTransform', MAT3]]) === null &&
+		uvt('_MainTex', [['_MainTex_ST', VEC4]]) === 'st:_MainTex_ST' && uvt('diffuseSampler', [['diffuseMatrix', MAT4]]) === 'mat4:diffuseMatrix' &&
+		uvt('texture_diffuseMap', [['texture_diffuseMapTransform0', VEC3], ['texture_diffuseMapTransform1', VEC3]]) === 'rows:texture_diffuseMapTransform0,texture_diffuseMapTransform1');
+	const uvs = Float32Array.from([0, 0, 4095 / 65535, 4095 / 65535]);
+	I.transformUVs(uvs, [65535 / 4095, 0, 0, 65535 / 4095, 0, 0]);
+	check('uv transforms: 12-bit coordinates stretched back to 0..1', nearArray(Array.from(uvs), [0, 0, 1, 1], 1e-6), Array.from(uvs));
 
 	const strip = Array.from(I.triangulate(5, Uint32Array.from([0, 1, 2, 3, 0xFFFFFFFF, 4, 5, 6]), 0xFFFFFFFF));
 	check('triangulate: strip with primitive restart', nearArray(strip, [0, 1, 2, 2, 1, 3, 4, 5, 6], 0), strip);

@@ -12,7 +12,7 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addFailures, checkCubeZip, checkEditorResults, checkSkinnedResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
+import { addFailures, checkCubeZip, checkEditorResults, checkOptimizedResults, checkSkinnedResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
 import { build } from '../scripts/build.mjs';
 import { checkTranslations } from './i18n-check.mjs';
 
@@ -169,6 +169,17 @@ async function threeTests(devtools, base) {
 	checkSkinnedResults(skinnedResults);
 	report('no uncaught page errors', skinned.errors.length === 0, skinned.errors);
 	await devtools.send('Target.closeTarget', { targetId: skinned.targetId });
+
+	console.log('\n== Optimized glTF model (tests/optimized.html) ==');
+	const optimized = await openPage(devtools, `${base}/tests/optimized.html`);
+	const optimizedResults = await poll(() => evaluate(devtools, optimized.sessionId, 'window.testResults || null'), 30000);
+	if (!optimizedResults) {
+		report('optimized model capture finished', false, optimized.errors.concat(optimized.logs.slice(-5)));
+		return;
+	}
+	checkOptimizedResults(optimizedResults);
+	report('no uncaught page errors', optimized.errors.length === 0, optimized.errors);
+	await devtools.send('Target.closeTarget', { targetId: optimized.targetId });
 }
 
 async function extensionTests(devtools, base) {

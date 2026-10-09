@@ -41,7 +41,8 @@ Chrome, Edge, Brave, Opera and Firefox.
 - **Clean output.** Shadow-map and depth passes, move and axis gizmos, outlines, full-screen post-processing passes
   and duplicate draws are left out automatically; sky domes are offered unselected.
 - **Exact textures.** Saved byte for byte at their real size, including compressed (DXT/S3TC), float, half-float and
-  luminance textures, and color under transparent pixels.
+  luminance textures, and color under transparent pixels. Models from AI generators such as Meshy (optimized glTF
+  with compressed texture coordinates) keep their texture mapping.
 - **Light on the page.** Nothing is hooked per draw call until you press the hotkey; exports are streamed in small
   pieces, so even 4K-textured models don't run the tab out of memory. Nothing is ever sent anywhere.
 
