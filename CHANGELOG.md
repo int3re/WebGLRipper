@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.3.0
+
+### Added
+
+- **Straight into Blender.** A free Blender add-on (`blender/webglripper_blender.py`, Blender 3.6 or newer, tested
+  with 4.5) watches the downloads folder and imports every new rip — GLB, STL, USDZ or an OBJ zip — as soon as the
+  download is complete, into a collection of its own, selected and framed. A GLB's page camera becomes the scene camera when the scene has
+  none. *Import latest rip* in the sidebar imports the newest file on demand.
+- **Characters in their pose.** On WebGL 2 pages skinned and morphed meshes are saved the way they are on the screen
+  instead of in the bind pose: the page's vertex shader runs once more with transform feedback and the moved vertices
+  are read back (option *Characters in their current pose*, on by default).
+- **The page's camera in GLB files**: a *Page camera* node with the page's view and lens, so Blender opens the same
+  view (option *Include the page's camera*, on by default).
+- **Smaller GLB** (option, off by default): `KHR_mesh_quantization` geometry and JPEG for opaque textures. Geometry
+  takes about half the space; a model with a photo texture went from 760 KB to 136 KB.
+- **STL** (binary, Z up, for 3D printing) and **USDZ** (for AR Quick Look on iPhone and iPad) formats, in the options
+  and in the preview.
+- **Turntable video:** <kbd>V</kbd> or *Video* in the preview records a 6-second 360° WebM of the selected meshes.
+- **History of rips:** every rip with its thumbnails, site, numbers and file, newest first. *Show in folder* and
+  *Open* find the download again; the last 50 rips are kept, only in this browser and never for private windows
+  (option *Keep a history of rips*). Opened from *History* in the popup or the options.
+- **Russian interface.** The popup, the options, the history, the preview, the pick hint and the status texts are in
+  English or Russian, following the browser's language or chosen under *Interface → Language*. Store texts and
+  keyboard shortcut names are localized too.
+
+### Changed
+
+- Text in the popup, the options and the history is no longer shrunk by Chrome's default `font-size: 75%` for
+  extension pages: buttons and status texts were smaller than the captions next to them.
+- The `downloads` permission is optional: it is asked for the first time *Show in folder* is used, so updating the
+  extension doesn't need new permissions.
+
 ## 1.2.0
 
 ### Added

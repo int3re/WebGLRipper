@@ -1,9 +1,10 @@
 {
 	"manifest_version": 3,
-	"name": "WebGL Ripper",
-	"description": "Rip 3D models (OBJ/MTL) and textures (PNG) from WebGL pages.",
+	"name": "__MSG_extensionName__",
+	"description": "__MSG_extensionDescription__",
+	"default_locale": "en",
 	"author": "Rilshrink",
-	"version": "1.2.0",
+	"version": "1.3.0",
 	"minimum_chrome_version": "121",
 	"icons": {
 		"16": "icons/icon16.png",
@@ -35,7 +36,7 @@
 		},
 		{
 			"matches": ["<all_urls>"],
-			"js": ["settings.js", "bridge.js"],
+			"js": ["settings.js", "i18n.js", "bridge.js"],
 			"run_at": "document_start",
 			"all_frames": true,
 			"match_about_blank": true
@@ -47,14 +48,18 @@
 	},
 	"commands": {
 		"capture-frame": {
-			"description": "Rip the next frame in the current tab"
+			"description": "__MSG_commandCapture__"
 		},
 		"pick-object": {
-			"description": "Pick one object in the current tab and rip it"
+			"description": "__MSG_commandPick__"
 		}
 	},
 	"permissions": [
 		"storage"
+	],
+	"optional_permissions": [
+		"downloads",
+		"downloads.open"
 	],
 	"host_permissions": [
 		"<all_urls>"

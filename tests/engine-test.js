@@ -93,7 +93,9 @@ function unitTests() {
 	check('matrix: Unity hlslcc array', matrix('hlslcc_mtx4x4unity_ObjectToWorld[0]') === 'model');
 	check('matrix: uMVMatrix', matrix('uMVMatrix') === 'modelView');
 	check('matrix: uniform block member', matrix('Mesh.world') === 'model');
-	check('matrix: viewProjection ignored', matrix('viewProjection') === null);
+	check('matrix: viewProjection is not a model matrix', matrix('viewProjection') === 'viewProjection');
+	check('matrix: projection and model-view-projection', matrix('projectionMatrix') === 'projection' && matrix('uPMatrix') === 'projection' &&
+		matrix('u_mvp') === 'mvp' && matrix('hlslcc_mtx4x4unity_MatrixVP[0]') === 'viewProjection');
 
 	const color = (n) => I.classifyColorUniform(n);
 	check('color: three.js diffuse / u_color / Unity _Color', color('diffuse') === 'base' && color('u_color') === 'base' && color('_Color') === 'base');

@@ -1,0 +1,14 @@
+{
+	"extensionName": {
+		"message": "WebGL Ripper"
+	},
+	"extensionDescription": {
+		"message": "Rip 3D models and textures from WebGL pages: GLB, OBJ, STL or USDZ, with a 3D preview."
+	},
+	"commandCapture": {
+		"message": "Rip the next frame in the current tab"
+	},
+	"commandPick": {
+		"message": "Pick one object in the current tab and rip it"
+	}
+}

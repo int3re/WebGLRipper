@@ -1,6 +1,6 @@
 ---
 title: How WebGL Ripper works
-description: The capture engine of WebGL Ripper in detail — WebGL hooks, frame recording, matrix and texture heuristics, texture readback, cleanup, streaming GLB/OBJ export, the preview, pick mode, performance and privacy.
+description: The capture engine of WebGL Ripper in detail — WebGL hooks, frame recording, matrix and texture heuristics, posed characters through transform feedback, texture readback, cleanup, streaming GLB/OBJ/STL/USDZ export, the page's camera, the preview and turntable video, pick mode, history, the Blender add-on, performance and privacy.
 lang: en
 ---
 
@@ -19,21 +19,24 @@ frame as the GPU sees it and turns every draw call back into a mesh.
            hooks (webglripper.js, in the page)
                      │  one recorded frame
                      ▼
-     draw calls ─► cleanup ─► preview (viewer.js) ─► GLB / OBJ + MTL + PNG ─► download
+     draw calls ─► cleanup ─► preview (viewer.js) ─► GLB / OBJ / STL / USDZ ─► download ─► history, Blender
 ```
 
 1. [Where the code runs](#where-the-code-runs)
 2. [Hooks that are always on](#hooks-that-are-always-on)
 3. [Recording a frame](#recording-a-frame)
 4. [What is read for every draw call](#what-is-read-for-every-draw-call)
-5. [Finding the real model: cleanup](#finding-the-real-model-cleanup)
-6. [Textures](#textures)
-7. [The preview](#the-preview)
-8. [Pick mode](#pick-mode)
-9. [Export: GLB, OBJ and ZIP](#export-glb-obj-and-zip)
-10. [Performance](#performance)
-11. [Privacy and safety](#privacy-and-safety)
-12. [Known limits](#known-limits)
+5. [Characters in their pose](#characters-in-their-pose)
+6. [Finding the real model: cleanup](#finding-the-real-model-cleanup)
+7. [Textures](#textures)
+8. [The preview](#the-preview)
+9. [Pick mode](#pick-mode)
+10. [Export: GLB, OBJ, STL, USDZ and ZIP](#export-glb-obj-stl-usdz-and-zip)
+11. [After the download: history and Blender](#after-the-download-history-and-blender)
+12. [Interface languages](#interface-languages)
+13. [Performance](#performance)
+14. [Privacy and safety](#privacy-and-safety)
+15. [Known limits](#known-limits)
 
 ## Where the code runs
 
@@ -127,6 +130,29 @@ that are not material textures at all (shadow maps, environment maps, LUTs, prev
 Color uniforms (`diffuse`, `u_color`, `_Color`, `baseColorFactor`…) become the material color — but not the color of a
 light (`directionalLights[0].color`). Blending and face culling decide transparency and `doubleSided`.
 
+## Characters in their pose
+
+A character animated on the GPU is uploaded once in its bind pose (often a T-pose); every frame the vertex shader
+moves its vertices by bone matrices or morph target weights. The buffers therefore hold the T-pose, and that is what
+other rippers save.
+
+On WebGL 2 pages WebGL Ripper asks the GPU where the vertices went. When a program looks animated (attributes or
+uniforms named like bones, joints, skin or morph weights), the engine:
+
+1. compiles a copy of the page's vertex shader into a program of its own, with the same attribute locations and
+   `gl_Position` captured by **transform feedback**;
+2. right at the recorded draw call — with the page's vertex arrays, buffers and textures still bound — copies every
+   uniform value and uniform block binding from the page's program to the copy;
+3. draws the used vertex range once more as points with `RASTERIZER_DISCARD` (nothing reaches the screen) into a
+   buffer of its own, and reads it back;
+4. turns the clip-space positions back into the mesh's own space with the inverse of the matrices it found for the
+   draw call (projection × view × model, or an MVP matrix), with the homogeneous divide.
+
+The result is placed like any other mesh; normals are computed afterwards, because the shader's normals aren't
+captured. The page's GL state (program, transform feedback, buffer bindings, rasterizer discard) is restored right
+after. WebGL 1 has no transform feedback, so there characters stay in their bind pose. Turn it off with **Characters
+in their current pose**.
+
 ## Finding the real model: cleanup
 
 A frame contains a lot that isn't the model. In this order:
@@ -188,6 +214,9 @@ can't affect it, and the engine ignores the preview's own WebGL context.
   line with its triangles, texture size and dimensions. Thumbnails are drawn a few per frame, for the rows on screen.
 - After the download the same renderer makes small thumbnails of the biggest saved meshes for the toolbar popup,
   which lists them under *Last rip* together with what was left out, next to the canvases found on the page.
+- **Turntable video:** <kbd>V</kbd> (or **Video**) turns the selected meshes once around in 6 seconds and records the
+  preview canvas with `captureStream()` and `MediaRecorder` (VP9 or VP8 WebM, 8 Mbit/s); excluded meshes are hidden
+  while it records.
 - Each base color texture is decoded once, straight at preview size (at most 2048 px), even when many meshes share it;
   only a 68 px copy is kept for the list. Colors are shown as a glTF importer shows them (linear factors, sRGB
   textures).
@@ -207,12 +236,29 @@ Pick mode answers the question "which draw call drew *this* pixel?":
 
 Only the picked mesh is exported (or pre-selected in the preview).
 
-## Export: GLB, OBJ and ZIP
+## Export: GLB, OBJ, STL, USDZ and ZIP
 
 **GLB** (glTF 2.0 binary) has one node and mesh per captured mesh with `POSITION`, `NORMAL`, `TEXCOORD_0`
 (flipped to glTF's convention) and `COLOR_0`, 16- or 32-bit indices, PBR materials (base color, normal, emissive,
 occlusion, and metal/roughness when the page samples them from one texture, as glTF expects) and the PNGs embedded. It
 is assembled from `Blob` parts, so geometry and textures aren't copied into one big buffer.
+
+**The page's camera** goes into the GLB as a node named *Page camera*: its position is the inverse of the view matrix
+shared by the biggest mesh's draw calls, its lens comes from their projection matrix (perspective field of view,
+aspect, near and far planes, or an orthographic size), and it moves with the model when the export is centered.
+Blender's glTF importer creates it as a camera object, so *Numpad 0* shows the view the page showed.
+
+**Smaller GLB** uses `KHR_mesh_quantization`: positions become 16-bit integers around each mesh's center (the node's
+translation and uniform scale put them back), normals 8-bit, UVs 16-bit when they stay within 0..1, colors 8-bit; and
+opaque textures are re-encoded as JPEG (quality 0.9) when that is smaller. Geometry takes about half the space; a
+model with a 768×768 photo texture went from 760 KB to 136 KB.
+
+**STL** is binary: one facet per triangle of the selected meshes, placed in the scene, with the face normal, and Y-up
+turned into Z-up so the model stands on a slicer's bed.
+
+**USDZ** is a USD text layer (`.usda`) with a mesh per selected mesh (points, normals, UVs, face indices) and a
+`UsdPreviewSurface` material with its base color, normal and emissive textures, packed with the PNGs into an
+uncompressed zip with every file aligned to 64 bytes — what AR Quick Look on iPhone and iPad requires.
 
 **OBJ** indexes positions, UVs and normals separately; writing each distinct value once keeps meshes connected
 across UV seams and hard edges in Blender. Text is generated in 1 MB pieces. Materials go into one MTL file with
@@ -225,6 +271,29 @@ browser as Blobs (which can be paged out to disk), instead of one Blob per file.
 The download is a `blob:` URL clicked on a hidden link. During long steps the export pauses every ~30 ms with a
 message-channel tick, so the page keeps rendering; timers aren't used for this because browsers throttle them in
 background tabs.
+
+## After the download: history and Blender
+
+When a rip is saved, the page sends the background a short summary: the file name, the numbers, what was left out,
+the page's address and title, and the small thumbnails made for the popup. The background keeps the last 50 in
+`storage.local` (never for private windows) for the **history** page. To find a file again it searches the browser's
+download list by name (a name that got a `(1)` suffix matches too) and calls `downloads.show` or `downloads.open`; the
+`downloads` permission is optional and asked for only on the first **Show in folder**.
+
+The **Blender add-on** (`blender/webglripper_blender.py`) runs a timer every 1.5 seconds that lists `webglripper_*`
+files in the watched folder. Files that were there when it started watching are ignored; a new one is imported once
+no `.crdownload` / `.part` file sits next to it and its size hasn't changed since the previous look. GLB goes through
+Blender's glTF importer, STL and USDZ through their importers, a zip is unpacked next to itself and its `model.glb`,
+`scene.obj` or `mesh_*.obj` files are imported. Everything imported lands in a new collection named after the file,
+is selected and framed; a *Page camera* becomes the scene camera when the scene has none.
+
+## Interface languages
+
+The interface is in English and Russian. `i18n.js` holds the translations keyed by the English text, with plural
+forms chosen through `Intl.PluralRules` (one / few / many for Russian). Extension pages translate their static text
+before they are shown; the page engine and the preview get the table from the content script with each capture, so
+the status texts in the popup, the preview and the pick hint speak the same language. *Automatic* follows the
+browser's interface language. A test checks that every text the code and the pages use has a translation.
 
 ## Performance
 
@@ -240,16 +309,17 @@ See the [comparison with the original](comparison.md) for measured numbers.
 ## Privacy and safety
 
 - **No network.** The extension makes no requests at all; captures never leave your computer.
-- **Permissions:** `storage` (settings) and access to pages (to run the engine in them). Nothing else.
+- **Permissions:** `storage` (settings and the history, both kept in the browser) and access to pages (to run the
+  engine in them). `downloads` is optional: the history asks for it on the first **Show in folder**.
 - **No remote code.** Everything runs from the files in the package.
 - **The page isn't changed.** Hooks never throw into the page, GL state is restored after every read, and the preview
   is isolated from the page's scripts and styles.
 
 ## Known limits
 
-- Characters skinned on the GPU are saved in their bind pose; morph targets aren't applied (the vertex shader moves
-  the vertices, the extension saves what the page uploaded).
+- On WebGL 1 pages characters skinned on the GPU are saved in their bind pose (WebGL 1 can't read back what the
+  vertex shader computed). Bones and animations are not exported, only the current pose.
 - WebGL running in a Web Worker (`OffscreenCanvas` transferred to a worker) is out of reach of a page script.
 - Instanced draws export one copy of the instanced geometry; `WEBGL_multi_draw` batches have no per-object matrices.
 - Name heuristics can miss unusual engines; Options → Advanced takes extra names, and `rip-info.json` lists the names a
-  page uses.
+  page uses. The same goes for recognizing animated programs for posing.

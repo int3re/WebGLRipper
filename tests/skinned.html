@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>WebGL Ripper posed characters test</title>
+	<!-- A skinned cylinder whose upper half is bent 90 degrees by its bone, and a box stretched upwards by a morph
+	     target. With "Characters in their current pose" the export has the pose on the screen, otherwise the stored one. -->
+	<script>
+		window.__WEBGLRIPPER_TEST__ = {
+			downloads: [],
+			onDownload(name, blob) { this.downloads.push({ name, blob }); }
+		};
+	</script>
+	<script src="../webglripper.js"></script>
+	<script type="importmap">
+		{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js" } }
+	</script>
+</head>
+<body style="margin:0">
+	<pre id="log"></pre>
+	<script type="module">
+		import * as THREE from 'three';
+
+		const renderer = new THREE.WebGLRenderer();
+		renderer.setSize(480, 360);
+		document.body.prepend(renderer.domElement);
+		const scene = new THREE.Scene();
+		const camera = new THREE.PerspectiveCamera(50, 480 / 360, 0.1, 100);
+		camera.position.set(0, 1, 12);
+		camera.lookAt(0, 0, 0);
+		scene.add(new THREE.AmbientLight(0xffffff, 1), new THREE.DirectionalLight(0xffffff, 1));
+
+		// Skinned: a cylinder from y = -2 to 2; the lower half follows bone 0, the upper half bone 1 (at y = 0)
+		const geometry = new THREE.CylinderGeometry(0.3, 0.3, 4, 12, 16);
+		const position = geometry.attributes.position;
+		const skinIndex = [], skinWeight = [];
+		for (let i = 0; i < position.count; i++) {
+			skinIndex.push(position.getY(i) > 0.01 ? 1 : 0, 0, 0, 0);
+			skinWeight.push(1, 0, 0, 0);
+		}
+		geometry.setAttribute('skinIndex', new THREE.Uint16BufferAttribute(skinIndex, 4));
+		geometry.setAttribute('skinWeight', new THREE.Float32BufferAttribute(skinWeight, 4));
+		const root = new THREE.Bone(), joint = new THREE.Bone();
+		root.position.y = -2;
+		joint.position.y = 2;
+		root.add(joint);
+		const skinned = new THREE.SkinnedMesh(geometry, new THREE.MeshStandardMaterial({ color: 0x88aa55 }));
+		skinned.add(root);
+		skinned.bind(new THREE.Skeleton([root, joint]));
+		skinned.position.x = -3;
+		joint.rotation.z = Math.PI / 2; // bend the upper half to the left
+		scene.add(skinned);
+
+		// Morphed: a unit box whose top is moved up by 2 at full influence
+		const box = new THREE.BoxGeometry(1, 1, 1);
+		const target = box.attributes.position.clone();
+		for (let i = 0; i < target.count; i++) {
+			if (target.getY(i) > 0)
+				target.setY(i, target.getY(i) + 2);
+		}
+		box.morphAttributes.position = [target];
+		const morphed = new THREE.Mesh(box, new THREE.MeshStandardMaterial({ color: 0x5588cc }));
+		morphed.morphTargetInfluences = [1];
+		morphed.position.x = 3;
+		scene.add(morphed);
+
+		renderer.setAnimationLoop(() => renderer.render(scene, camera));
+
+		const capture = (settings) => new Promise(resolve => {
+			document.addEventListener('webglripper:ext', function listener(event) {
+				const message = JSON.parse(event.detail);
+				if (message.type === 'state' && ['done', 'error', 'idle'].includes(message.state)) {
+					document.removeEventListener('webglripper:ext', listener);
+					resolve(message);
+				}
+			});
+			document.dispatchEvent(new CustomEvent('webglripper:page', { detail: JSON.stringify({ type: 'capture', settings: { __version: 'test',
+				show_preview: false, export_format: 'obj', should_download_zip: false, center_model: false, ...settings } }) }));
+		});
+		const bounds = async () => {
+			const T = window.__WEBGLRIPPER_TEST__;
+			const objs = await Promise.all(T.downloads.filter(d => d.name.endsWith('.obj')).map(d => d.blob.text()));
+			T.downloads.length = 0;
+			return objs.map(text => {
+				const v = text.split('\n').filter(l => l.startsWith('v ')).map(l => l.split(' ').slice(1, 4).map(Number));
+				const lo = [0, 1, 2].map(k => Math.min(...v.map(p => p[k]))), hi = [0, 1, 2].map(k => Math.max(...v.map(p => p[k])));
+				return { vertices: v.length, lo: lo.map(x => +x.toFixed(2)), hi: hi.map(x => +x.toFixed(2)), normals: text.split('\n').filter(l => l.startsWith('vn ')).length };
+			}).sort((a, b) => a.lo[0] - b.lo[0]);
+		};
+
+		async function run() {
+			await new Promise(r => setTimeout(r, 600));
+			const posed = await capture({ bake_poses: true });
+			const posedMeshes = await bounds();
+			const stored = await capture({ bake_poses: false });
+			const storedMeshes = await bounds();
+			window.testResults = { posed: { state: posed.state, meshes: posedMeshes }, stored: { state: stored.state, meshes: storedMeshes } };
+			document.getElementById('log').textContent = JSON.stringify(window.testResults, null, 2);
+		}
+		run();
+	</script>
+</body>
+</html>

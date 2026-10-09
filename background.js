@@ -1,5 +1,5 @@
 // Background (service worker in Chrome, event page in Firefox).
-// Broadcasts captures to every frame of a tab and keeps the toolbar badge up to date.
+// Broadcasts captures to every frame of a tab, keeps the toolbar badge up to date and remembers the rips.
 'use strict';
 
 const api = globalThis.browser || globalThis.chrome;
@@ -15,6 +15,41 @@ const BADGES = {
 };
 
 const resetTimers = new Map();
+const HISTORY_SIZE = 50;
+let historyQueue = Promise.resolve();
+
+/* Keeps the last rips (what was saved, thumbnails, where from) for the history page. */
+function rememberRip(result, sender) {
+	if (!result || !result.filename || (sender.tab && sender.tab.incognito))
+		return;
+	const page = result.page && typeof result.page === 'object' ? result.page : {};
+	const objects = Array.isArray(result.objects) ? result.objects.slice(0, 12) : [];
+	const entry = {
+		id: String(result.id || `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`),
+		time: Date.now(),
+		url: String(page.url || sender.url || ''),
+		host: String(page.host || ''),
+		title: String(page.title || (sender.tab && sender.tab.title) || ''),
+		format: String(result.format || ''),
+		filename: String(result.filename),
+		files: result.files | 0,
+		meshes: result.meshes | 0,
+		textures: result.textures | 0,
+		objects,
+		leftOut: result.leftOut || {}
+	};
+	// one write at a time: two frames can finish together
+	historyQueue = historyQueue.then(async () => {
+		const { keep_history: keep } = await api.storage.sync.get({ keep_history: true }).catch(() => ({ keep_history: true }));
+		if (!keep)
+			return;
+		const { history = [] } = await api.storage.local.get('history');
+		if (history.some(other => other.id === entry.id))
+			return; // the same rip reported again
+		history.unshift(entry);
+		await api.storage.local.set({ history: history.slice(0, HISTORY_SIZE) });
+	}).catch(() => {});
+}
 
 function setBadge(tabId, badge) {
 	clearTimeout(resetTimers.get(tabId));
@@ -52,6 +87,7 @@ api.runtime.onMessage.addListener((message, sender) => {
 			if (message.state === 'done') {
 				const meshes = message.result ? message.result.meshes : 0;
 				flashBadge(tabId, { text: String(Math.min(meshes, 999)), color: '#2e7d32' });
+				rememberRip(message.result, sender);
 			} else if (message.state === 'error') {
 				flashBadge(tabId, BADGES.error);
 			} else if (message.state === 'idle') {

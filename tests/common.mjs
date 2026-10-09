@@ -121,6 +121,18 @@ export function checkThreeResults(results) {
 	}
 	const pick = results.pick || {};
 	report('pick mode through a half-float render target (EffectComposer) finds the gem', pick.state === 'done' && pick.objects === 1 && pick.vertices === 92, pick);
+
+	const formats = results.formats || {};
+	const compact = formats.compact || {};
+	report('compact GLB: quantized, loads in GLTFLoader with the box still at (5, 0, 0)', !formats.error && compact.quantized &&
+		(compact.centers || []).some(c => near(c, [5, 0, 0], 0.5)), formats.error || compact);
+	const camera = compact.camera && compact.camera.perspective;
+	report('GLB has the page camera: 50° field of view at (0, 6, 20)', !!camera && Math.abs(camera.yfov - 50 * Math.PI / 180) < 0.01 &&
+		compact.loadedCameras === 1 && !!compact.cameraNode && near(compact.cameraNode.matrix.slice(12, 15), [0, 6, 20], 0.01), compact);
+	report('STL has every triangle of the four meshes', formats.stl && formats.stl.triangles > 300 && formats.stl.bytes === 84 + formats.stl.triangles * 50, formats.stl);
+	const usdz = formats.usdz || {};
+	report('USDZ: model.usda first, every file 64-byte aligned, a texture', (usdz.files || [])[0] && usdz.files[0].name === 'model.usda' &&
+		usdz.files.every(f => f.aligned) && usdz.files.some(f => f.name.endsWith('.png')) && /^#usda 1\.0/.test(usdz.layer || ''), usdz);
 }
 
 /* Expectations for tests/editor.html: an editor-style viewer with a move gizmo, an outline, SMAA, an axis gizmo and a
@@ -137,6 +149,21 @@ export function checkEditorResults(results) {
 	const near = (a, b) => a.every((v, i) => Math.abs(v - b[i]) < 0.02);
 	report('GLB: just the model, in its place at (0.5, 0.3, 0)', glb.length === 1 && near(glb[0].center, [0.5, 0.3, 0]), glb);
 	report('without the preview: one OBJ (the background is not downloaded)', results.direct.objs === 1, results.direct);
+}
+
+/* Expectations for tests/skinned.html: a skinned cylinder bent at its middle joint and a box stretched by a morph
+ * target, 6 units to the right of it. */
+export function checkSkinnedResults(results) {
+	const near = (a, b) => Math.abs(a - b) < 0.05;
+	const [cylinder, box] = (results.posed && results.posed.meshes) || [];
+	const [straight, plain] = (results.stored && results.stored.meshes) || [];
+	report('posed capture done', results.posed && results.posed.state === 'done' && results.stored.state === 'done', results);
+	report('skinned cylinder saved in its pose: the upper half bent to the left', !!cylinder && near(cylinder.lo[0], -2) && near(cylinder.hi[1], 0.3) &&
+		near(cylinder.lo[1], -2), cylinder);
+	report('morph target applied: the box is 3 tall', !!box && near(box.hi[1] - box.lo[1], 3), box);
+	report('without "current pose": the stored shapes (straight cylinder, unit box)', !!straight && near(straight.hi[1], 2) && near(straight.lo[0], -0.3) &&
+		!!plain && near(plain.hi[1] - plain.lo[1], 1), { straight, plain });
+	report('camera unknown: the box keeps its place relative to the cylinder (6 to the right)', !!box && near((box.lo[0] + box.hi[0]) / 2, 6), box);
 }
 
 /* Checks the .glb from the pick + preview end-to-end test: just the cube, textured, standing on the origin. */

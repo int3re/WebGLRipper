@@ -27,6 +27,18 @@ Object.defineProperty(window, ENGINE_FLAG, {
 		},
 		ownCanvas(canvas) {
 			ownCanvases.add(canvas);
+		},
+		/* the preview's turntable video */
+		saveFile(name, blob) {
+			if (blob instanceof Blob)
+				saveBlob(String(name).replace(/[^\w.-]+/g, '_'), blob);
+		},
+		/* the preview speaks the interface language too */
+		t(text, values) {
+			return tr(text, values);
+		},
+		plural(n, forms) {
+			return plural(n, forms);
 		}
 	})
 });
@@ -63,6 +75,7 @@ const native = {
 	click: HTMLElement.prototype.click,
 	stringify: JSON.stringify,
 	parse: JSON.parse,
+	PluralRules: Intl.PluralRules,
 	log: console.log.bind(console),
 	info: console.info.bind(console),
 	warn: console.warn.bind(console),
@@ -72,6 +85,7 @@ const native = {
 	CompressionStream: window.CompressionStream,
 	TextEncoder: window.TextEncoder,
 	MessageChannel: window.MessageChannel,
+	createImageBitmap: typeof window.createImageBitmap === 'function' ? window.createImageBitmap.bind(window) : null,
 	postMessage: MessagePort.prototype.postMessage,
 	setOnMessage: Object.getOwnPropertyDescriptor(MessagePort.prototype, 'onmessage').set
 };
@@ -132,6 +146,10 @@ const GL = {
 	VIEWPORT: 0x0BA2, COLOR_WRITEMASK: 0x0C23, DEPTH_WRITEMASK: 0x0B72,
 	CULL_FACE_MODE: 0x0B45, FRONT_FACE: 0x0B46, FRONT: 0x0404, BACK: 0x0405, CW: 0x0900, CCW: 0x0901,
 	BLEND: 0x0BE2, CULL_FACE: 0x0B44, DEPTH_TEST: 0x0B71, STENCIL_TEST: 0x0B90, SCISSOR_TEST: 0x0C11,
+	VERTEX_SHADER: 0x8B31, FRAGMENT_SHADER: 0x8B30, SHADER_TYPE: 0x8B4F, POINTS: 0x0000,
+	TRANSFORM_FEEDBACK: 0x8E22, TRANSFORM_FEEDBACK_BUFFER: 0x8C8E, TRANSFORM_FEEDBACK_BUFFER_BINDING: 0x8C8F,
+	TRANSFORM_FEEDBACK_BINDING: 0x8E25, SEPARATE_ATTRIBS: 0x8C8D, STREAM_READ: 0x88E1, ACTIVE_UNIFORM_BLOCKS: 0x8A36,
+	UNIFORM_BLOCK_BINDING: 0x8A3F,
 	DITHER: 0x0BD0, POLYGON_OFFSET_FILL: 0x8037, SAMPLE_ALPHA_TO_COVERAGE: 0x809E, SAMPLE_COVERAGE: 0x80A0,
 	RASTERIZER_DISCARD: 0x8C89, SAMPLES: 0x80A9,
 	IMPLEMENTATION_COLOR_READ_TYPE: 0x8B9A, IMPLEMENTATION_COLOR_READ_FORMAT: 0x8B9B
@@ -241,6 +259,9 @@ const extensionOwner = new WeakMap();   // extension object -> context
 const instancingEnabled = new WeakSet();
 const vertexArraysEnabled = new WeakSet(); // WebGL 1 contexts that enabled OES_vertex_array_object
 const uniformLocations = new WeakMap(); // WebGLUniformLocation -> { program, base, index }
+const shaderSources = new WeakMap();        // WebGLShader -> source
+const vertexShaders = new WeakMap();        // WebGLProgram -> its vertex shader
+const linkedVertexSources = new WeakMap();  // WebGLProgram -> vertex shader source it was linked with
 const renderTargetTextures = new WeakMap(); // texture the page renders into -> its framebuffer (post-processing buffers, shadow maps…)
 const ownFramebuffers = new WeakSet();       // framebuffers WebGL Ripper uses to read textures back
 
@@ -568,6 +589,20 @@ function installHooks() {
 		});
 	}
 
+	// Vertex shaders of WebGL 2 programs, to run them again for posed characters (rare calls, at load time)
+	if (P2) {
+		hookMethod(P2, 'shaderSource', (gl, a) => { if (a[0]) shaderSources.set(a[0], String(a[1])); });
+		hookMethod(P2, 'attachShader', (gl, a) => {
+			if (a[0] && a[1] && callNative(gl, 'getShaderParameter', [a[1], GL.SHADER_TYPE]) === GL.VERTEX_SHADER)
+				vertexShaders.set(a[0], a[1]);
+		});
+		hookMethod(P2, 'linkProgram', (gl, a) => {
+			const shader = a[0] && vertexShaders.get(a[0]);
+			if (shader && shaderSources.has(shader))
+				linkedVertexSources.set(a[0], shaderSources.get(shader));
+		});
+	}
+
 	// WebGL 1 can't read buffers back, so their contents are copied as they are uploaded
 	hookMethod(P1, 'bufferData', (gl, a) => shadowBufferData(gl, a[0], a[1]));
 	hookMethod(P1, 'bufferSubData', (gl, a) => shadowBufferSubData(gl, a[0], a[1], a[2]));
@@ -628,6 +663,45 @@ function classifyColorUniform(name) {
 }
 
 const VIEW_MATRIX_NAMES = new Set(['viewmatrix', 'view', 'matrixview', 'unitymatrixv', 'cameraview', 'viewmat']);
+/* Sets a uniform from the value getUniform returned for it, whatever its type. */
+function setUniform(g, location, type, value) {
+	if (value === null || value === undefined)
+		return;
+	const ints = (v) => Int32Array.from(v, Number);
+	switch (type) {
+		case 0x1406: g.uniform1f(location, value); break;                        // FLOAT
+		case 0x8B50: g.uniform2fv(location, value); break;                       // FLOAT_VEC2..4
+		case 0x8B51: g.uniform3fv(location, value); break;
+		case 0x8B52: g.uniform4fv(location, value); break;
+		case 0x8B53: case 0x8B57: g.uniform2iv(location, ints(value)); break;    // INT_VEC2, BOOL_VEC2
+		case 0x8B54: case 0x8B58: g.uniform3iv(location, ints(value)); break;
+		case 0x8B55: case 0x8B59: g.uniform4iv(location, ints(value)); break;
+		case 0x1405: g.uniform1ui(location, value); break;                       // UNSIGNED_INT(_VEC2..4)
+		case 0x8DC6: g.uniform2uiv(location, value); break;
+		case 0x8DC7: g.uniform3uiv(location, value); break;
+		case 0x8DC8: g.uniform4uiv(location, value); break;
+		case 0x8B5A: g.uniformMatrix2fv(location, false, value); break;          // FLOAT_MAT2..4 and the others
+		case 0x8B5B: g.uniformMatrix3fv(location, false, value); break;
+		case 0x8B5C: g.uniformMatrix4fv(location, false, value); break;
+		case 0x8B65: g.uniformMatrix2x3fv(location, false, value); break;
+		case 0x8B66: g.uniformMatrix2x4fv(location, false, value); break;
+		case 0x8B67: g.uniformMatrix3x2fv(location, false, value); break;
+		case 0x8B68: g.uniformMatrix3x4fv(location, false, value); break;
+		case 0x8B69: g.uniformMatrix4x2fv(location, false, value); break;
+		case 0x8B6A: g.uniformMatrix4x3fv(location, false, value); break;
+		default: g.uniform1i(location, Number(value));                           // INT, BOOL, samplers
+	}
+}
+
+// skinning (bones, joints, weights) and morph targets: the vertex shader moves the vertices
+const ANIMATED_NAME = /bone|joint|skin|morph|blendweight|blendindices|matricesindices|matricesweights/i;
+
+const PROJECTION_MATRIX_NAMES = new Set(['projectionmatrix', 'projection', 'proj', 'projmatrix', 'pmatrix', 'matrixprojection',
+	'unitymatrixp', 'glstatematrixprojection', 'cameraprojection', 'projmat', 'perspectivematrix', 'perspective']);
+const VIEW_PROJECTION_MATRIX_NAMES = new Set(['viewprojection', 'viewprojectionmatrix', 'viewproj', 'viewprojmatrix', 'vpmatrix',
+	'unitymatrixvp', 'matrixvp', 'projview', 'projectionview', 'projectionviewmatrix', 'cameraviewprojection']);
+const MVP_MATRIX_NAMES = new Set(['modelviewprojection', 'modelviewprojectionmatrix', 'mvp', 'mvpmatrix', 'worldviewprojection',
+	'wvp', 'unitymatrixmvp', 'matrixmvp', 'worldviewproj']);
 
 function nameTokens(name) {
 	return String(name)
@@ -697,7 +771,7 @@ function classifyTexture(name, extraNames) {
 	return ['unknown', 10];
 }
 
-/* Returns 'model' | 'modelView' | 'view' | null. */
+/* Returns 'model' | 'modelView' | 'view' | 'projection' | 'viewProjection' | 'mvp' | null. */
 function classifyMatrix(name, extraNames) {
 	const base = String(name).replace(/\[\d+\]$/, '').replace(/^.*\./, '').replace(/^hlslcc_mtx4x4/i, '');
 	const s = base.toLowerCase().replace(/[^a-z0-9]/g, '');
@@ -710,6 +784,12 @@ function classifyMatrix(name, extraNames) {
 		return 'modelView';
 	if (candidates.some(c => VIEW_MATRIX_NAMES.has(c)))
 		return 'view';
+	if (candidates.some(c => PROJECTION_MATRIX_NAMES.has(c)))
+		return 'projection';
+	if (candidates.some(c => VIEW_PROJECTION_MATRIX_NAMES.has(c)))
+		return 'viewProjection';
+	if (candidates.some(c => MVP_MATRIX_NAMES.has(c)))
+		return 'mvp';
 	return null;
 }
 
@@ -961,6 +1041,8 @@ function splitNames(value) {
 	return String(value || '').split(/[\s,;]+/).map(s => s.trim().toLowerCase()).filter(Boolean);
 }
 
+const FORMATS = ['glb', 'obj', 'both', 'stl', 'usdz'];
+
 function normalizeSettings(raw) {
 	raw = raw || {};
 	const [width, height] = String(raw.default_texture_res || '4096x4096').split('x').map(n => parseInt(n, 10));
@@ -973,7 +1055,10 @@ function normalizeSettings(raw) {
 		skipOverlays: raw.skip_overlays !== false,
 		weldVertices: raw.weld_vertices !== false,
 		vertexColors: raw.export_vertex_colors !== false,
-		format: ['glb', 'obj', 'both'].includes(raw.export_format) ? raw.export_format : 'glb',
+		format: FORMATS.includes(raw.export_format) ? raw.export_format : 'glb',
+		camera: raw.export_camera !== false,
+		compact: raw.glb_compact === true,
+		bakePoses: raw.bake_poses !== false,
 		preview: raw.show_preview !== false,
 		center: raw.center_model !== false,
 		computeNormals: raw.compute_normals !== false,
@@ -1063,6 +1148,8 @@ class ContextCapture {
 		this.webgl2 = isWebGL2(gl);
 		this.g = makeFacade(gl);
 		this.programs = new Map();
+		this.bakes = new Map();          // page program -> copy that records positions (posed characters)
+		this.feedback = null;
 		this.bufferCache = new Map();
 		this.instancing = this.webgl2 || instancingEnabled.has(gl);  // whether divisors can be non-zero
 		this.maxTextureUnits = this.g.getParameter(GL.MAX_COMBINED_TEXTURE_IMAGE_UNITS) || 8;
@@ -1121,7 +1208,8 @@ class ContextCapture {
 			return info;
 		const g = this.g;
 		const names = this.session.settings.names;
-		info = { attribs: {}, attributeNames: [], samplers: [], colors: {}, model: null, modelView: null, view: null };
+		info = { attribs: {}, attributeNames: [], samplers: [], colors: {}, model: null, modelView: null, view: null,
+			projection: null, viewProjection: null, mvp: null };
 
 		const attributeCount = g.getProgramParameter(program, GL.ACTIVE_ATTRIBUTES) || 0;
 		for (let i = 0; i < attributeCount; i++) {
@@ -1132,6 +1220,8 @@ class ContextCapture {
 			if (location < 0)
 				continue; // built-ins such as gl_VertexID
 			info.attributeNames.push(active.name);
+			if (ANIMATED_NAME.test(active.name))
+				info.animated = true;
 			const match = classifyAttribute(active.name, names);
 			if (!match)
 				continue;
@@ -1145,6 +1235,8 @@ class ContextCapture {
 			const active = g.getActiveUniform(program, i);
 			if (!active)
 				continue;
+			if (ANIMATED_NAME.test(active.name))
+				info.animated = true;
 			if (active.type === GL.SAMPLER_2D) {
 				const location = g.getUniformLocation(program, active.name);
 				if (!location)
@@ -1269,24 +1361,178 @@ class ContextCapture {
 	/* Returns { kind: 'model' | 'modelView', m, view } describing how to bring this draw into world space. view is the
 	 * camera of this draw when it could be found; modelView-only meshes are resolved with it after the capture. */
 	drawMatrix(program, info) {
-		let view = info.view ? this.readMatrix(program, info.view) : null;
-		const model = info.model ? this.readMatrix(program, info.model) : null;
-		const modelView = info.modelView ? this.readMatrix(program, info.modelView) : null;
+		const read = (role) => (info[role] ? this.readMatrix(program, info[role]) : null);
+		let view = read('view');
+		const model = read('model');
+		const modelView = read('modelView');
+		const projectionUniform = read('projection'), viewProjection = read('viewProjection'), mvp = read('mvp');
 		if (!view && model && modelView) {
 			// view = modelView * inverse(model): lets modelView-only programs (three.js) be placed in world space
 			const inverseModel = invert4(model);
 			if (inverseModel)
 				view = Float32Array.from(multiply4(modelView, inverseModel));
 		}
+		// The camera's lens, and the whole way from the mesh's own coordinates to the screen (for posed characters)
+		let projection = projectionUniform;
+		if (!projection && viewProjection && view) {
+			const inverseView = invert4(view);
+			if (inverseView)
+				projection = Float32Array.from(multiply4(viewProjection, inverseView));
+		}
+		const clip = mvp || (projection && modelView ? multiply4(projection, modelView)
+			: viewProjection && model ? multiply4(viewProjection, model)
+			: projection && view && model ? multiply4(projection, multiply4(view, model)) : null);
+		const lens = { projection, clip: clip ? Float32Array.from(clip) : null };
 		if (model)
-			return { kind: 'model', m: model, view };
+			return { kind: 'model', m: model, view, ...lens };
 		if (modelView) {
 			const inverseView = view && invert4(view);
 			if (inverseView)
-				return { kind: 'model', m: Float32Array.from(multiply4(inverseView, modelView)), view };
-			return { kind: 'modelView', m: modelView, view: null };
+				return { kind: 'model', m: Float32Array.from(multiply4(inverseView, modelView)), view, modelView, ...lens };
+			return { kind: 'modelView', m: modelView, view: null, ...lens };
 		}
-		return view ? { kind: 'none', m: null, view } : null;
+		return view || clip ? { kind: 'none', m: null, view, ...lens } : null;
+	}
+
+	/* ---- posed characters ---- */
+
+	/* A copy of the page's program that records gl_Position with transform feedback instead of drawing. */
+	bakeProgram(program) {
+		if (this.bakes.has(program))
+			return this.bakes.get(program);
+		this.bakes.set(program, null);
+		const g = this.g;
+		const source = linkedVertexSources.get(program);
+		if (!source)
+			return null;
+		const es3 = /^\s*#version\s+300\s+es/.test(source);
+		const fragment = es3 ? '#version 300 es\nprecision highp float;\nout vec4 webglripperColor;\nvoid main() { webglripperColor = vec4(0.0); }'
+			: 'precision mediump float;\nvoid main() { gl_FragColor = vec4(0.0); }';
+		const copy = g.createProgram();
+		const shaders = [[GL.VERTEX_SHADER, source], [GL.FRAGMENT_SHADER, fragment]].map(([type, text]) => {
+			const shader = g.createShader(type);
+			g.shaderSource(shader, text);
+			g.compileShader(shader);
+			g.attachShader(copy, shader);
+			return shader;
+		});
+		// the page's vertex array has to feed the copy exactly as it feeds the original
+		const attributes = g.getProgramParameter(program, GL.ACTIVE_ATTRIBUTES) || 0;
+		for (let i = 0; i < attributes; i++) {
+			const active = g.getActiveAttrib(program, i);
+			const location = active ? g.getAttribLocation(program, active.name) : -1;
+			if (location >= 0)
+				g.bindAttribLocation(copy, location, active.name);
+		}
+		g.transformFeedbackVaryings(copy, ['gl_Position'], GL.SEPARATE_ATTRIBS);
+		g.linkProgram(copy);
+		for (const shader of shaders) {
+			g.detachShader(copy, shader);
+			g.deleteShader(shader);
+		}
+		if (!g.getProgramParameter(copy, GL.LINK_STATUS)) {
+			log('Pose bake: the copy did not link:', g.getProgramInfoLog(copy));
+			g.deleteProgram(copy);
+			return null;
+		}
+		const uniforms = [];
+		const count = g.getProgramParameter(copy, GL.ACTIVE_UNIFORMS) || 0;
+		for (let i = 0; i < count; i++) {
+			const active = g.getActiveUniform(copy, i);
+			if (!active)
+				continue;
+			const base = active.name.replace(/\[0\]$/, '');
+			const names = active.size > 1 ? Array.from({ length: active.size }, (_, k) => `${base}[${k}]`) : [active.name];
+			for (const name of names) {
+				const from = g.getUniformLocation(program, name), to = g.getUniformLocation(copy, name);
+				if (from && to)
+					uniforms.push({ from, to, type: active.type });
+			}
+		}
+		const blocks = [];
+		const blockCount = g.getProgramParameter(copy, GL.ACTIVE_UNIFORM_BLOCKS) || 0;
+		for (let i = 0; i < blockCount; i++) {
+			const from = g.getUniformBlockIndex(program, g.getActiveUniformBlockName(copy, i));
+			if (from !== 0xFFFFFFFF)
+				blocks.push({ from, to: i });
+		}
+		const bake = { program: copy, uniforms, blocks };
+		this.bakes.set(program, bake);
+		return bake;
+	}
+
+	/* Runs the vertex shader of the current draw again over the vertices it used and returns their positions in the
+	 * mesh's own coordinates: gl_Position taken back through the inverse of the matrix to clip space. Null if the
+	 * program can't be copied. */
+	bakePositions(program, unique, min, max, clip) {
+		const inverse = invert4(clip);
+		const bake = inverse && this.bakeProgram(program);
+		if (!bake)
+			return null;
+		const g = this.g;
+		const count = max - min + 1;
+		const previousFeedback = g.getParameter(GL.TRANSFORM_FEEDBACK_BINDING);
+		const previousBuffer = g.getParameter(GL.TRANSFORM_FEEDBACK_BUFFER_BINDING);
+		const discard = g.isEnabled(GL.RASTERIZER_DISCARD);
+		const buffer = g.createBuffer();
+		const output = new Float32Array(count * 4);
+		try {
+			g.useProgram(bake.program);
+			for (const u of bake.uniforms)
+				setUniform(g, u.to, u.type, g.getUniform(program, u.from));
+			for (const b of bake.blocks)
+				g.uniformBlockBinding(bake.program, b.to, g.getActiveUniformBlockParameter(program, b.from, GL.UNIFORM_BLOCK_BINDING));
+			if (!this.feedback)
+				this.feedback = g.createTransformFeedback();
+			g.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, this.feedback);
+			g.bindBuffer(GL.TRANSFORM_FEEDBACK_BUFFER, buffer);
+			g.bufferData(GL.TRANSFORM_FEEDBACK_BUFFER, output.byteLength, GL.STREAM_READ);
+			g.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, buffer);
+			g.enable(GL.RASTERIZER_DISCARD);
+			g.beginTransformFeedback(GL.POINTS);
+			g.drawArrays(GL.POINTS, min, count);
+			g.endTransformFeedback();
+			g.bindBufferBase(GL.TRANSFORM_FEEDBACK_BUFFER, 0, null); // clears the generic binding too
+			// read through COPY_READ_BUFFER: a buffer can't be read while it is a transform feedback target
+			const previousCopy = g.getParameter(GL.COPY_READ_BUFFER);
+			g.bindBuffer(GL.COPY_READ_BUFFER, buffer);
+			g.getBufferSubData(GL.COPY_READ_BUFFER, 0, output);
+			g.bindBuffer(GL.COPY_READ_BUFFER, previousCopy);
+		} catch (err) {
+			log('Pose bake failed:', err);
+			return null;
+		} finally {
+			if (!discard)
+				g.disable(GL.RASTERIZER_DISCARD);
+			g.bindTransformFeedback(GL.TRANSFORM_FEEDBACK, previousFeedback);
+			g.bindBuffer(GL.TRANSFORM_FEEDBACK_BUFFER, previousBuffer);
+			g.deleteBuffer(buffer);
+			g.useProgram(program);
+		}
+		const positions = new Float32Array(unique.length * 3);
+		const m = inverse;
+		for (let i = 0; i < unique.length; i++) {
+			const o = (unique[i] - min) * 4;
+			const x = output[o], y = output[o + 1], z = output[o + 2], w = output[o + 3];
+			const hw = m[3] * x + m[7] * y + m[11] * z + m[15] * w || 1;
+			positions[i * 3] = (m[0] * x + m[4] * y + m[8] * z + m[12] * w) / hw;
+			positions[i * 3 + 1] = (m[1] * x + m[5] * y + m[9] * z + m[13] * w) / hw;
+			positions[i * 3 + 2] = (m[2] * x + m[6] * y + m[10] * z + m[14] * w) / hw;
+		}
+		return positions.every(Number.isFinite) ? positions : null;
+	}
+
+	disposeBakes() {
+		const g = this.g;
+		for (const bake of this.bakes.values()) {
+			if (bake)
+				g.deleteProgram(bake.program);
+		}
+		this.bakes.clear();
+		if (this.feedback) {
+			g.deleteTransformFeedback(this.feedback);
+			this.feedback = null;
+		}
 	}
 
 	/* ---- vertex attribute and buffer access ---- */
@@ -1493,7 +1739,8 @@ class ContextCapture {
 		const normal = info.attribs.normal ? this.attribState(info.attribs.normal.location) : null;
 		const uv = info.attribs.uv ? this.attribState(info.attribs.uv.location) : null;
 		const color = s.settings.vertexColors && info.attribs.color ? this.attribState(info.attribs.color.location) : null;
-		const matrix = s.settings.applyMatrix ? this.drawMatrix(program, info) : null;
+		const posing = s.settings.bakePoses && this.webgl2 && info.animated;
+		const matrix = s.settings.applyMatrix || posing ? this.drawMatrix(program, info) : null;
 		const score = textures.length * 4 + (uv ? 2 : 0) + (normal ? 1 : 0) + (color ? 1 : 0);
 
 		const geometryKey = [this.index, mode, idOf(position.buffer), position.offset, position.stride, position.type,
@@ -1531,7 +1778,9 @@ class ContextCapture {
 		if (!triangles.length)
 			return;
 		const { remapped, unique, min, max } = compactVertices(triangles);
-		const positions = this.readAttribute(position, unique, min, max, 3);
+		// Skinned and morphed meshes: the pose on the screen, not the one stored in the buffers
+		const posed = posing && matrix && matrix.clip ? this.bakePositions(program, unique, min, max, matrix.clip) : null;
+		const positions = posed || this.readAttribute(position, unique, min, max, 3);
 		if (!positions) {
 			s.stats.unreadable++;
 			return;
@@ -1564,7 +1813,8 @@ class ContextCapture {
 			vertexCount: unique.length,
 			triangles: remapped,
 			positions,
-			normals: normal ? this.readAttribute(normal, unique, min, max, 3) : null,
+			normals: normal && !posed ? this.readAttribute(normal, unique, min, max, 3) : null, // a posed mesh gets new ones
+			posed: !!posed,
 			uvs: uv ? this.readAttribute(uv, unique, min, max, 2) : null,
 			colors: color ? this.readAttribute(color, unique, min, max, 3) : null,
 			program: {
@@ -2123,7 +2373,7 @@ async function encodePNG(width, height, readRows, flipRows, write) {
 			return cached.data;
 		const data = readRows(start, count);
 		if (!data)
-			throw new RipperError('The texture could not be read.');
+			throw new RipperError(tr('The texture could not be read.'));
 		cached = { start, count, data };
 		return data;
 	};
@@ -2288,7 +2538,7 @@ class ZipBuilder {
 	/* data is a Blob or a BlobCollector, storedSize its length in the archive, size the length of the file. */
 	append(nameBytes, crc, method, data, storedSize, size) {
 		if (this.entries.length >= 0xFFFF || size > 0xFFFFFFFF || this.offset + 30 + nameBytes.length + storedSize > 0xFFFFFFFF)
-			throw new RipperError('The capture is too large for a .zip file (4 GB / 65535 files). Disable "Download as ZIP".');
+			throw new RipperError(tr('The capture is too large for a .zip file (4 GB / 65535 files). Turn off "Download OBJ as ZIP" in the options.'));
 		const header = new Uint8Array(30 + nameBytes.length);
 		const v = new DataView(header.buffer);
 		v.setUint32(0, 0x04034B50, true);
@@ -2489,19 +2739,33 @@ function finalizeMeshes(session) {
 		return best ? best.view : null;
 	};
 
+	// Without a known camera, camera space would depend on where the user was looking. The biggest mesh drawn with a
+	// model-view matrix keeps its own coordinates (for single-model viewers that is exactly how the model was made),
+	// and the others are placed relative to it: they share the camera, so inverse(MV_reference) * MV is their place.
+	const references = new Map();
+	for (const mesh of meshes) {
+		if (!mesh.matrix || mesh.matrix.kind !== 'modelView' || !mesh.matrix.m || cameraOf(mesh.context))
+			continue;
+		const best = references.get(mesh.context);
+		if (!best || mesh.triangles.length > best.triangles.length)
+			references.set(mesh.context, mesh);
+	}
+	session.references = references;
 	for (const mesh of meshes) {
 		mesh.triangleCount = mesh.triangles.length / 3;
 		mesh.transform = 'local';
 		let m = mesh.matrix && mesh.matrix.m;
+		let placed = 'world';
 		if (m && mesh.matrix.kind === 'modelView') {
-			// Without a known camera, camera space would depend on where the user was looking: keep the mesh's
-			// own coordinates instead (for single-model viewers that is exactly how the model was authored).
 			const view = cameraOf(mesh.context);
 			const inverseView = view && invert4(view);
-			m = inverseView ? multiply4(inverseView, m) : null;
+			const reference = references.get(mesh.context);
+			const inverseReference = !inverseView && reference && reference !== mesh && invert4(reference.matrix.m);
+			m = inverseView ? multiply4(inverseView, m) : inverseReference ? multiply4(inverseReference, m) : null;
+			placed = inverseView ? 'world' : 'relative';
 		}
 		if (m) {
-			mesh.transform = 'world';
+			mesh.transform = placed;
 			transformPositions(mesh.positions, m);
 			const n = mesh.normals && normalMatrix(m);
 			if (n)
@@ -2530,7 +2794,53 @@ function finalizeMeshes(session) {
 		markBackgrounds(meshes);
 	if (session.pick)
 		markPickedMesh(meshes, closer);
+	session.camera = findCamera(session, meshes.filter(mesh => !mesh.background), cameraOf);
 	return meshes;
+}
+
+/* The camera the page drew the scene with, in the coordinates of the export: the view most draws of the busiest
+ * context used, with the projection drawn with it. When the view is unknown the meshes keep their own coordinates,
+ * and the camera is placed relative to the biggest of them. */
+function findCamera(session, meshes, cameraOf) {
+	if (!meshes.length)
+		return null;
+	const main = meshes.reduce((a, b) => (b.triangleCount > a.triangleCount ? b : a));
+	const same = meshes.filter(mesh => mesh.context === main.context && mesh.matrix);
+	const projectionOf = (list) => (list.find(mesh => mesh.matrix.projection) || { matrix: {} }).matrix.projection || null;
+	const view = cameraOf(main.context);
+	let world = null, projection = null;
+	if (view) {
+		world = invert4(view);
+		const key = Array.prototype.join.call(view, ',');
+		projection = projectionOf(same.filter(mesh => mesh.matrix.view && Array.prototype.join.call(mesh.matrix.view, ',') === key)) || projectionOf(same);
+	} else if (session.references && session.references.get(main.context)) {
+		// meshes were placed relative to this one: the camera too
+		const reference = session.references.get(main.context);
+		world = invert4(reference.matrix.m);
+		projection = reference.matrix.projection;
+	}
+	if (!world)
+		return null;
+	const gl = main.context.gl;
+	return { world: Float32Array.from(world), projection, aspect: gl.drawingBufferWidth / Math.max(1, gl.drawingBufferHeight) };
+}
+
+/* glTF camera from a GL projection matrix (column-major). */
+function gltfCamera(camera) {
+	const p = camera.projection;
+	if (p && p[15] === 1 && p[11] === 0 && p[0] && p[5] && p[10]) {
+		const near = (p[14] + 1) / p[10], far = (p[14] - 1) / p[10];
+		return { type: 'orthographic', orthographic: { xmag: 1 / p[0], ymag: 1 / p[5], znear: Math.max(0, Math.min(near, far)), zfar: Math.max(near, far) } };
+	}
+	if (p && p[5] > 0 && p[0] > 0 && p[11] === -1) {
+		const perspective = { yfov: 2 * Math.atan(1 / p[5]), aspectRatio: p[5] / p[0] };
+		const near = p[14] / (p[10] - 1), far = p[14] / (p[10] + 1);
+		perspective.znear = near > 0 ? near : 0.01;
+		if (far > perspective.znear && Number.isFinite(far) && Math.abs(p[10] + 1) > 1e-6)
+			perspective.zfar = far;
+		return { type: 'perspective', perspective };
+	}
+	return { type: 'perspective', perspective: { yfov: 0.8, aspectRatio: camera.aspect || 1, znear: 0.01 } };
 }
 
 /* Positions of a full-screen pass, given in clip space: a quad from -1 to 1 or a triangle from -1 to 3, flat. */
@@ -2627,7 +2937,7 @@ function markPickedMesh(meshes, closer) {
 			picked = mesh;
 	}
 	if (!picked)
-		throw new RipperError('Nothing was found under the cursor. Click on a solid part of the object (not its outline).');
+		throw new RipperError(tr('Nothing was found under the cursor. Click on a solid part of the object (not its outline).'));
 	picked.picked = true;
 }
 
@@ -2926,7 +3236,36 @@ function saveBlob(filename, blob) {
 }
 
 const sleep = (ms) => new Promise(resolve => native.setTimeout(resolve, ms));
-const plural = (n, one, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
+/* The interface language. bridge.js sends the translations (English text -> translated text, see i18n.js) with
+ * every command; without them everything stays English. */
+let strings = null;
+let pluralRules = null;
+
+function useLocale(locale) {
+	strings = locale && typeof locale === 'object' && locale.strings && typeof locale.strings === 'object' ? locale.strings : null;
+	try {
+		pluralRules = strings ? new native.PluralRules(String(locale.language || 'en')) : null;
+	} catch (err) {
+		pluralRules = null;
+	}
+}
+
+function tr(text, values) {
+	let result = strings && typeof strings[text] === 'string' ? strings[text] : text;
+	if (values)
+		result = result.replace(/\{(\w+)\}/g, (match, key) => (key in values ? String(values[key]) : match));
+	return result;
+}
+
+const formatCount = (n) => Number(n || 0).toLocaleString('en-US').replace(/,/g, '\u202f');
+
+/* plural(5, 'mesh|meshes') -> "5 meshes"; a language may have three forms (one|few|many) */
+function plural(n, forms) {
+	const list = tr(forms).split('|');
+	const category = pluralRules ? pluralRules.select(Number(n) || 0) : n === 1 ? 'one' : 'other';
+	const index = category === 'one' ? 0 : category === 'few' ? 1 : category === 'many' ? 2 : list.length - 1;
+	return `${formatCount(n)} ${list[Math.min(index, list.length - 1)]}`;
+}
 
 /* An export runs on the page's main thread. Long loops call this to let the page render a frame (and the preview
  * respond) every few dozen milliseconds. It yields with a message: timers are throttled in background tabs. */
@@ -3024,7 +3363,7 @@ async function readTextures(capture, entries, progress) {
 	const pending = entries.filter(entry => entry.png === undefined);
 	try {
 		for (let i = 0; i < pending.length; i++) {
-			progress(`Reading texture ${i + 1} of ${pending.length}…`);
+			progress(tr('Reading texture {n} of {total}…', { n: i + 1, total: pending.length }));
 			pending[i].png = await readTexturePNG(pending[i], capture.settings.unflip);
 		}
 	} finally {
@@ -3040,10 +3379,10 @@ async function prepareCapture(capture, progress, previewing) {
 	const meshes = finalizeMeshes(capture);
 	capture.meshes = []; // dropped duplicates can be garbage collected now
 	if (!meshes.length) {
-		let message = `No triangle meshes were found in ${capture.drawCount} draw call(s).`;
+		let message = tr('No triangle meshes were found in {draws}.', { draws: plural(capture.drawCount, 'draw call|draw calls'), drawCount: capture.drawCount });
 		if (capture.unrecognizedAttributes.size) {
 			const sample = Array.from(capture.unrecognizedAttributes).slice(0, 3).join(' | ');
-			message += ` Unrecognized vertex attributes: ${sample}. Add the position attribute name under Options → Advanced.`;
+			message += ' ' + tr('Unrecognized vertex attributes: {sample}. Add the position attribute name under Options → Advanced.', { sample });
 		}
 		throw new RipperError(message);
 	}
@@ -3074,12 +3413,12 @@ async function prepareCapture(capture, progress, previewing) {
 	return { meshes, textures };
 }
 
-const GLB_FLOAT = 5126, GLB_UNSIGNED_SHORT = 5123, GLB_UNSIGNED_INT = 5125;
+const GLB_FLOAT = 5126, GLB_UNSIGNED_SHORT = 5123, GLB_UNSIGNED_INT = 5125, GLB_SHORT = 5122, GLB_BYTE = 5120, GLB_UNSIGNED_BYTE = 5121;
 const GLB_ARRAY_BUFFER = 34962, GLB_ELEMENT_ARRAY_BUFFER = 34963;
 
 /* glTF 2.0 binary: one node per mesh, PBR materials, PNG textures embedded. Built from Blob parts, so the geometry
  * and textures are not copied into one big buffer. */
-function buildGLB(meshes, flipV, extras) {
+function buildGLB(meshes, flipV, extras, options = {}) {
 	const json = {
 		asset: { version: '2.0', generator: `WebGL Ripper ${engineVersion}`, extras },
 		scene: 0,
@@ -3100,16 +3439,19 @@ function buildGLB(meshes, flipV, extras) {
 			length += padding;
 		}
 	};
-	const addView = (data, target) => {
+	const addView = (data, target, stride) => {
 		align();
 		const size = data instanceof native.Blob ? data.size : data.byteLength;
-		json.bufferViews.push(target ? { buffer: 0, byteOffset: length, byteLength: size, target } : { buffer: 0, byteOffset: length, byteLength: size });
+		const view = target ? { buffer: 0, byteOffset: length, byteLength: size, target } : { buffer: 0, byteOffset: length, byteLength: size };
+		if (stride)
+			view.byteStride = stride;
+		json.bufferViews.push(view);
 		parts.push(data instanceof native.Blob ? data : new Uint8Array(data.buffer, data.byteOffset, data.byteLength));
 		length += size;
 		return json.bufferViews.length - 1;
 	};
-	const addAccessor = (array, type, componentType, count, target, extra) => {
-		json.accessors.push({ bufferView: addView(array, target), componentType, count, type, ...extra });
+	const addAccessor = (array, type, componentType, count, target, extra, stride) => {
+		json.accessors.push({ bufferView: addView(array, target, stride), componentType, count, type, ...extra });
 		return json.accessors.length - 1;
 	};
 
@@ -3122,7 +3464,8 @@ function buildGLB(meshes, flipV, extras) {
 			json.images = json.images || [];
 			json.textures = json.textures || [];
 			json.samplers = json.samplers || [{ magFilter: 9729, minFilter: 9987, wrapS: 10497, wrapT: 10497 }];
-			json.images.push({ name: `tex_${pad(slot.entry.index, 1)}`, bufferView: addView(slot.entry.png.blob), mimeType: 'image/png' });
+			const jpeg = options.jpegs && options.jpegs.get(slot.entry);
+			json.images.push({ name: `tex_${pad(slot.entry.index, 1)}`, bufferView: addView(jpeg || slot.entry.png.blob), mimeType: jpeg ? 'image/jpeg' : 'image/png' });
 			json.textures.push({ sampler: 0, source: json.images.length - 1 });
 			textureIndex.set(slot.entry, index = json.textures.length - 1);
 		}
@@ -3175,23 +3518,70 @@ function buildGLB(meshes, flipV, extras) {
 				if (v > hi[k]) hi[k] = v;
 			}
 		}
-		const attributes = {
-			POSITION: addAccessor(mesh.positions, 'VEC3', GLB_FLOAT, count, GLB_ARRAY_BUFFER, { min: lo, max: hi })
-		};
-		if (mesh.normals)
-			attributes.NORMAL = addAccessor(mesh.normals, 'VEC3', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
-		if (mesh.uvs) {
-			let uvs = mesh.uvs;
-			if (flipV) {
-				// The PNGs are stored the way OBJ expects (origin bottom left); glTF puts the origin at the top
-				uvs = Float32Array.from(uvs);
-				for (let i = 1; i < uvs.length; i += 2)
-					uvs[i] = 1 - uvs[i];
-			}
-			attributes.TEXCOORD_0 = addAccessor(uvs, 'VEC2', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
+		let uvs = mesh.uvs;
+		if (uvs && flipV) {
+			// The PNGs are stored the way OBJ expects (origin bottom left); glTF puts the origin at the top
+			uvs = Float32Array.from(uvs);
+			for (let i = 1; i < uvs.length; i += 2)
+				uvs[i] = 1 - uvs[i];
 		}
-		if (mesh.colors)
-			attributes.COLOR_0 = addAccessor(mesh.colors, 'VEC3', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
+		const node = { name: mesh.name };
+		const attributes = {};
+		if (options.quantize) {
+			// KHR_mesh_quantization: 16-bit positions around the mesh's center, scaled back by the node; 8-bit normals;
+			// 16-bit UVs when they stay within 0..1; 8-bit colors. A node scale keeps the normals right as it is uniform.
+			const center = lo.map((l, k) => (l + hi[k]) / 2);
+			const extent = Math.max(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) / 2 || 1;
+			const q = new Int16Array(count * 4); // padded to 8 bytes per vertex
+			const qlo = [32767, 32767, 32767], qhi = [-32767, -32767, -32767];
+			for (let i = 0; i < count; i++) {
+				for (let k = 0; k < 3; k++) {
+					const v = Math.max(-32767, Math.min(32767, Math.round((mesh.positions[i * 3 + k] - center[k]) / extent * 32767)));
+					q[i * 4 + k] = v;
+					if (v < qlo[k]) qlo[k] = v;
+					if (v > qhi[k]) qhi[k] = v;
+				}
+			}
+			attributes.POSITION = addAccessor(q, 'VEC3', GLB_SHORT, count, GLB_ARRAY_BUFFER, { normalized: true, min: qlo, max: qhi }, 8);
+			node.translation = center;
+			node.scale = [extent, extent, extent];
+			if (mesh.normals) {
+				const n = new Int8Array(count * 4);
+				for (let i = 0; i < count; i++) {
+					const x = mesh.normals[i * 3], y = mesh.normals[i * 3 + 1], z = mesh.normals[i * 3 + 2];
+					const length = Math.hypot(x, y, z) || 1;
+					n[i * 4] = Math.round(x / length * 127);
+					n[i * 4 + 1] = Math.round(y / length * 127);
+					n[i * 4 + 2] = Math.round(z / length * 127);
+				}
+				attributes.NORMAL = addAccessor(n, 'VEC3', GLB_BYTE, count, GLB_ARRAY_BUFFER, { normalized: true }, 4);
+			}
+			if (uvs) {
+				let inside = true;
+				for (let i = 0; i < uvs.length && inside; i++)
+					inside = uvs[i] >= 0 && uvs[i] <= 1;
+				attributes.TEXCOORD_0 = inside
+					? addAccessor(Uint16Array.from(uvs, v => Math.round(v * 65535)), 'VEC2', GLB_UNSIGNED_SHORT, count, GLB_ARRAY_BUFFER, { normalized: true })
+					: addAccessor(uvs, 'VEC2', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
+			}
+			if (mesh.colors) {
+				const c = new Uint8Array(count * 4);
+				for (let i = 0; i < count; i++) {
+					for (let k = 0; k < 3; k++)
+						c[i * 4 + k] = Math.round(Math.min(Math.max(mesh.colors[i * 3 + k], 0), 1) * 255);
+					c[i * 4 + 3] = 255;
+				}
+				attributes.COLOR_0 = addAccessor(c, 'VEC4', GLB_UNSIGNED_BYTE, count, GLB_ARRAY_BUFFER, { normalized: true });
+			}
+		} else {
+			attributes.POSITION = addAccessor(mesh.positions, 'VEC3', GLB_FLOAT, count, GLB_ARRAY_BUFFER, { min: lo, max: hi });
+			if (mesh.normals)
+				attributes.NORMAL = addAccessor(mesh.normals, 'VEC3', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
+			if (uvs)
+				attributes.TEXCOORD_0 = addAccessor(uvs, 'VEC2', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
+			if (mesh.colors)
+				attributes.COLOR_0 = addAccessor(mesh.colors, 'VEC3', GLB_FLOAT, count, GLB_ARRAY_BUFFER);
+		}
 		const small = count <= 65535;
 		const indices = small ? Uint16Array.from(mesh.triangles) : mesh.triangles;
 		const primitive = {
@@ -3202,7 +3592,18 @@ function buildGLB(meshes, flipV, extras) {
 		if (mesh.material)
 			primitive.material = materialOf(mesh.material);
 		json.meshes.push({ name: mesh.name, primitives: [primitive] });
-		json.nodes.push({ name: mesh.name, mesh: json.meshes.length - 1 });
+		node.mesh = json.meshes.length - 1;
+		json.nodes.push(node);
+		json.scenes[0].nodes.push(json.nodes.length - 1);
+	}
+	if (options.quantize) {
+		json.extensionsUsed = ['KHR_mesh_quantization'];
+		json.extensionsRequired = ['KHR_mesh_quantization'];
+	}
+	if (options.camera) {
+		// glTF cameras look down -Z like GL ones, so the inverted view matrix places it as it is
+		json.cameras = [gltfCamera(options.camera)];
+		json.nodes.push({ name: 'Page camera', camera: 0, matrix: Array.from(options.camera.world, v => Math.round(v * 1e6) / 1e6) });
 		json.scenes[0].nodes.push(json.nodes.length - 1);
 	}
 	align();
@@ -3224,6 +3625,200 @@ function buildGLB(meshes, flipV, extras) {
 	new DataView(binHeader.buffer).setUint32(0, length, true);
 	new DataView(binHeader.buffer).setUint32(4, 0x004E4942, true); // "BIN"
 	return new native.Blob([header, jsonBytes, binHeader, ...parts], { type: 'model/gltf-binary' });
+}
+
+/* Opaque textures as JPEG for a compact GLB (they are most of its size); textures with transparency stay PNG. */
+async function jpegTextures(textures, progress) {
+	const jpegs = new Map();
+	if (typeof native.createImageBitmap !== 'function')
+		return jpegs;
+	for (const entry of textures) {
+		if (!entry.png || !entry.png.opaque)
+			continue;
+		progress(tr('Compressing texture {n}…', { n: entry.index + 1 }));
+		let bitmap = null;
+		try {
+			bitmap = await native.createImageBitmap(entry.png.blob, { premultiplyAlpha: 'none', colorSpaceConversion: 'none' });
+			const canvas = apply(native.createElement, document, ['canvas']);
+			canvas.width = bitmap.width;
+			canvas.height = bitmap.height;
+			const context = canvas.getContext('2d');
+			context.drawImage(bitmap, 0, 0);
+			const jpeg = await new Promise(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.9));
+			canvas.width = canvas.height = 0;
+			if (jpeg && jpeg.size < entry.png.blob.size)
+				jpegs.set(entry, jpeg);
+		} catch (err) {
+			log('JPEG conversion failed:', err);
+		} finally {
+			if (bitmap)
+				bitmap.close();
+		}
+		await breathe();
+	}
+	return jpegs;
+}
+
+/* Binary STL for 3D printing: every triangle of every mesh with its face normal, Z up as slicers expect (WebGL is
+ * Y up: (x, y, z) is written as (x, -z, y)). */
+function buildSTL(meshes, label) {
+	const triangles = meshes.reduce((sum, mesh) => sum + mesh.triangles.length / 3, 0);
+	const out = new ArrayBuffer(84 + triangles * 50);
+	const view = new DataView(out);
+	const header = new native.TextEncoder().encode(label.slice(0, 79));
+	new Uint8Array(out, 0, 80).set(header);
+	view.setUint32(80, triangles, true);
+	let o = 84;
+	for (const mesh of meshes) {
+		const p = mesh.positions, t = mesh.triangles;
+		for (let i = 0; i < t.length; i += 3) {
+			const a = t[i] * 3, b = t[i + 1] * 3, c = t[i + 2] * 3;
+			const ux = p[b] - p[a], uy = p[b + 1] - p[a + 1], uz = p[b + 2] - p[a + 2];
+			const vx = p[c] - p[a], vy = p[c + 1] - p[a + 1], vz = p[c + 2] - p[a + 2];
+			let nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+			const length = Math.hypot(nx, ny, nz) || 1;
+			nx /= length; ny /= length; nz /= length;
+			for (const value of [nx, -nz, ny, p[a], -p[a + 2], p[a + 1], p[b], -p[b + 2], p[b + 1], p[c], -p[c + 2], p[c + 1]]) {
+				view.setFloat32(o, value, true);
+				o += 4;
+			}
+			o += 2; // attribute byte count
+		}
+	}
+	return new native.Blob([out], { type: 'model/stl' });
+}
+
+/* USDZ for AR Quick Look (iPhone, iPad, Vision Pro): a USDA layer with UsdPreviewSurface materials and the PNG
+ * textures in an uncompressed ZIP whose files start at multiples of 64 bytes, as the format requires. */
+async function buildUSDZ(meshes, textures) {
+	const number = (v) => formatNumber(v);
+	const tuple = (array, i, size) => `(${Array.from({ length: size }, (_, k) => number(array[i * size + k])).join(', ')})`;
+	const parts = [];
+	let text = `#usda 1.0\n(\n\tcustomLayerData = {\n\t\tstring creator = "WebGL Ripper ${engineVersion}"\n\t}\n\tdefaultPrim = "Root"\n\tmetersPerUnit = 1\n\tupAxis = "Y"\n)\n\ndef Xform "Root"\n{\n`;
+	const flush = async () => {
+		parts.push(new native.TextEncoder().encode(text));
+		text = '';
+		await breathe();
+	};
+	const list = (array, size, count) => {
+		let out = '';
+		for (let i = 0; i < count; i++)
+			out += (i ? ', ' : '') + tuple(array, i, size);
+		return out;
+	};
+	const files = new Map(textures.filter(entry => entry.png).map(entry => [entry, `textures/tex_${pad(entry.index, textures.length)}.png`]));
+	const materials = new Set(meshes.map(mesh => mesh.material).filter(Boolean));
+	for (const mesh of meshes) {
+		const count = mesh.vertexCount, faces = mesh.triangles.length / 3;
+		text += `\tdef Mesh "${mesh.name}"\n\t{\n\t\tint[] faceVertexCounts = [${new Array(faces).fill(3).join(', ')}]\n`;
+		text += `\t\tint[] faceVertexIndices = [${Array.prototype.join.call(mesh.triangles, ', ')}]\n`;
+		text += `\t\tpoint3f[] points = [${list(mesh.positions, 3, count)}]\n`;
+		await flush();
+		if (mesh.normals)
+			text += `\t\tnormal3f[] normals = [${list(mesh.normals, 3, count)}] (\n\t\t\tinterpolation = "vertex"\n\t\t)\n`;
+		if (mesh.uvs)
+			text += `\t\ttexCoord2f[] primvars:st = [${list(mesh.uvs, 2, count)}] (\n\t\t\tinterpolation = "vertex"\n\t\t)\n`;
+		if (mesh.colors)
+			text += `\t\tcolor3f[] primvars:displayColor = [${list(mesh.colors, 3, count)}] (\n\t\t\tinterpolation = "vertex"\n\t\t)\n`;
+		if (mesh.doubleSided)
+			text += '\t\tuniform bool doubleSided = 1\n';
+		text += '\t\tuniform token subdivisionScheme = "none"\n';
+		if (mesh.material)
+			text += `\t\trel material:binding = </Root/Materials/${mesh.material.name}>\n`;
+		text += '\t}\n\n';
+		await flush();
+	}
+	text += '\tdef Scope "Materials"\n\t{\n';
+	for (const material of materials) {
+		const path = `/Root/Materials/${material.name}`;
+		const slot = (name) => material.slots.find(t => t.slot === name && files.has(t.entry));
+		const base = slot('map_Kd'), normal = slot('map_Bump'), emissive = slot('map_Ke');
+		const color = material.color || [1, 1, 1, 1];
+		text += `\t\tdef Material "${material.name}"\n\t\t{\n\t\t\ttoken outputs:surface.connect = <${path}/Surface.outputs:surface>\n\n`;
+		text += '\t\t\tdef Shader "Surface"\n\t\t\t{\n\t\t\t\tuniform token info:id = "UsdPreviewSurface"\n';
+		text += base ? `\t\t\t\tcolor3f inputs:diffuseColor.connect = <${path}/BaseColor.outputs:rgb>\n`
+			: `\t\t\t\tcolor3f inputs:diffuseColor = (${color.slice(0, 3).map(number).join(', ')})\n`;
+		if (normal)
+			text += `\t\t\t\tnormal3f inputs:normal.connect = <${path}/Normal.outputs:rgb>\n`;
+		if (emissive)
+			text += `\t\t\t\tcolor3f inputs:emissiveColor.connect = <${path}/Emissive.outputs:rgb>\n`;
+		else if (material.emissive)
+			text += `\t\t\t\tcolor3f inputs:emissiveColor = (${material.emissive.map(number).join(', ')})\n`;
+		if (color[3] < 1)
+			text += `\t\t\t\tfloat inputs:opacity = ${number(color[3])}\n`;
+		else if (material.blend && base && !base.entry.png.opaque)
+			text += `\t\t\t\tfloat inputs:opacity.connect = <${path}/BaseColor.outputs:a>\n`;
+		text += '\t\t\t\tfloat inputs:metallic = 0\n\t\t\t\tfloat inputs:roughness = 0.8\n\t\t\t\ttoken outputs:surface\n\t\t\t}\n';
+		if (base || normal || emissive)
+			text += `\n\t\t\tdef Shader "UV"\n\t\t\t{\n\t\t\t\tuniform token info:id = "UsdPrimvarReader_float2"\n\t\t\t\tstring inputs:varname = "st"\n\t\t\t\tfloat2 outputs:result\n\t\t\t}\n`;
+		for (const [name, t, extra] of [['BaseColor', base, ''], ['Normal', normal, '\t\t\t\tfloat4 inputs:scale = (2, 2, 2, 1)\n\t\t\t\tfloat4 inputs:bias = (-1, -1, -1, 0)\n\t\t\t\ttoken inputs:sourceColorSpace = "raw"\n'], ['Emissive', emissive, '']]) {
+			if (!t)
+				continue;
+			text += `\n\t\t\tdef Shader "${name}"\n\t\t\t{\n\t\t\t\tuniform token info:id = "UsdUVTexture"\n\t\t\t\tasset inputs:file = @${files.get(t.entry)}@\n`;
+			text += `\t\t\t\tfloat2 inputs:st.connect = <${path}/UV.outputs:result>\n\t\t\t\ttoken inputs:wrapS = "repeat"\n\t\t\t\ttoken inputs:wrapT = "repeat"\n${extra}`;
+			text += '\t\t\t\tfloat3 outputs:rgb\n\t\t\t\tfloat outputs:a\n\t\t\t}\n';
+		}
+		text += '\t\t}\n';
+	}
+	text += '\t}\n}\n';
+	await flush();
+
+	// Stored ZIP, every file's data 64-byte aligned through a padding extra field
+	const encoder = new native.TextEncoder();
+	const entries = [{ name: 'model.usda', blob: new native.Blob(parts) }];
+	for (const [entry, file] of files)
+		entries.push({ name: file, blob: entry.png.blob, crc: entry.png.crc });
+	const out = [], directory = [];
+	let offset = 0;
+	const date = new Date(), time = (date.getHours() << 11) | (date.getMinutes() << 5) | (date.getSeconds() >> 1);
+	const day = ((Math.max(1980, date.getFullYear()) - 1980) << 9) | ((date.getMonth() + 1) << 5) | date.getDate();
+	for (const file of entries) {
+		const name = encoder.encode(file.name);
+		const crc = file.crc !== undefined ? file.crc : crc32([new Uint8Array(await file.blob.arrayBuffer())]);
+		const base = offset + 30 + name.length + 4;
+		const padding = (64 - (base % 64)) % 64;
+		const header = new Uint8Array(30 + name.length + 4 + padding);
+		const v = new DataView(header.buffer);
+		v.setUint32(0, 0x04034B50, true);
+		v.setUint16(4, 20, true);
+		v.setUint16(6, 0x0800, true);
+		v.setUint16(10, time, true);
+		v.setUint16(12, day, true);
+		v.setUint32(14, crc, true);
+		v.setUint32(18, file.blob.size, true);
+		v.setUint32(22, file.blob.size, true);
+		v.setUint16(26, name.length, true);
+		v.setUint16(28, 4 + padding, true);
+		header.set(name, 30);
+		v.setUint16(30 + name.length, 0x3039, true); // padding field
+		v.setUint16(32 + name.length, padding, true);
+		const record = new Uint8Array(46 + name.length);
+		const r = new DataView(record.buffer);
+		r.setUint32(0, 0x02014B50, true);
+		r.setUint16(4, 20, true);
+		r.setUint16(6, 20, true);
+		r.setUint16(8, 0x0800, true);
+		r.setUint16(12, time, true);
+		r.setUint16(14, day, true);
+		r.setUint32(16, crc, true);
+		r.setUint32(20, file.blob.size, true);
+		r.setUint32(24, file.blob.size, true);
+		r.setUint16(28, name.length, true);
+		r.setUint32(42, offset, true);
+		record.set(name, 46);
+		out.push(header, file.blob);
+		directory.push(record);
+		offset += header.length + file.blob.size;
+	}
+	const size = directory.reduce((sum, record) => sum + record.length, 0);
+	const end = new Uint8Array(22);
+	const e = new DataView(end.buffer);
+	e.setUint32(0, 0x06054B50, true);
+	e.setUint16(8, entries.length, true);
+	e.setUint16(10, entries.length, true);
+	e.setUint32(12, size, true);
+	e.setUint32(16, offset, true);
+	return new native.Blob([...out, ...directory, end], { type: 'model/vnd.usdz+zip' });
 }
 
 /* Blob streams can hand out a whole part at once (megabytes of geometry): it is passed on in 1 MB pieces, so
@@ -3280,7 +3875,7 @@ async function writeOBJ(meshes, textures, settings, output, prefix, zip, encoder
 		const mesh = meshes[i];
 		if (native.now() - lastProgress > 250) {
 			lastProgress = native.now();
-			progress(`Writing mesh ${i + 1} of ${meshes.length}…`);
+			progress(tr('Writing mesh {n} of {total}…', { n: i + 1, total: meshes.length }));
 		}
 		indexAttributes(mesh, settings.weldVertices);
 		mesh.positionCount = mesh.obj.positions.count;
@@ -3306,14 +3901,22 @@ async function writeOBJ(meshes, textures, settings, output, prefix, zip, encoder
 }
 
 /* Writes the chosen meshes in the chosen format: a .glb on its own, or OBJ files (zipped or not), or both. */
-async function writeExport(capture, scene, meshes, format, progress) {
+async function writeExport(capture, scene, meshes, format, progress, compact = capture.settings.compact) {
 	const settings = capture.settings;
 	const stamp = timestamp();
 	const host = (location.hostname || 'page').replace(/[^a-z0-9.-]+/gi, '_');
 	const shift = settings.center ? centerMeshes(meshes) : null;
 	const used = scene.textures.filter(entry => meshes.some(mesh => mesh.textures.some(t => t.entry === entry)));
 	const textures = used.filter(entry => entry.png);
-	const wantOBJ = format !== 'glb', wantGLB = format !== 'obj';
+	const wantOBJ = format === 'obj' || format === 'both', wantGLB = format === 'glb' || format === 'both';
+	// the page's camera, moved along with the meshes
+	let camera = null;
+	if (settings.camera && capture.camera) {
+		camera = { ...capture.camera, world: Float32Array.from(capture.camera.world) };
+		if (shift)
+			for (let k = 0; k < 3; k++)
+				camera.world[12 + k] += shift[k];
+	}
 	const zip = wantOBJ && settings.zip;
 	const prefix = zip ? '' : `webglripper_${stamp}_`;
 	const encoder = new native.TextEncoder();
@@ -3324,9 +3927,16 @@ async function writeExport(capture, scene, meshes, format, progress) {
 		await writeOBJ(meshes, textures, settings, output, prefix, zip, encoder, progress);
 
 	let filename = zip ? `webglripper_${host}_${stamp}.zip` : `${prefix}*`;
+	if (format === 'stl' || format === 'usdz') {
+		progress(tr('Building {format}…', { format: format.toUpperCase() }));
+		filename = `webglripper_${host}_${stamp}.${format}`;
+		saveBlob(filename, format === 'stl' ? buildSTL(meshes, `WebGL Ripper: ${location.href}`) : await buildUSDZ(meshes, textures));
+		output.count++;
+	}
 	if (wantGLB) {
-		progress('Building GLB…');
-		const glb = buildGLB(meshes, settings.unflip, extras);
+		const jpegs = compact ? await jpegTextures(textures, progress) : null;
+		progress(tr('Building {format}…', { format: 'GLB' }));
+		const glb = buildGLB(meshes, settings.unflip, extras, { camera, quantize: compact, jpegs });
 		if (zip) {
 			const file = output.open('model.glb', true);
 			await pipeBlob(glb, file.write);
@@ -3380,7 +3990,7 @@ async function writeExport(capture, scene, meshes, format, progress) {
 			}))
 		}, null, '\t')));
 		await info.close();
-		progress('Packing .zip…');
+		progress(tr('Packing .zip…'));
 		saveBlob(filename, output.toBlob());
 	}
 	return { ...summary, files: output.count, filename };
@@ -3391,6 +4001,7 @@ function previewData(capture, scene) {
 	return {
 		title: location.hostname || document.title || 'page',
 		format: capture.settings.format,
+		compact: capture.settings.compact,
 		flipV: capture.settings.unflip,
 		meshes: scene.meshes.map(mesh => previewMesh(capture, mesh))
 	};
@@ -3507,25 +4118,25 @@ function requestCapture(pick = null) {
 		return;
 	}
 	if (!liveContexts().length) {
-		setStatus('idle', 'No WebGL content in this frame.');
+		setStatus('idle', tr('No WebGL content in this frame.'));
 		return;
 	}
 	if (typeof native.CompressionStream !== 'function') {
-		setStatus('error', 'This browser is too old: CompressionStream is not supported.');
+		setStatus('error', tr('This browser is too old: CompressionStream is not supported.'));
 		return;
 	}
 
 	const capture = new CaptureSession(normalizeSettings(rawSettings));
 	capture.pick = pick;
 	pendingCapture = true;
-	setStatus('waiting', 'Waiting for the next frame…');
+	setStatus('waiting', tr('Waiting for the next frame…'));
 
 	const giveUp = native.setTimeout(() => {
 		if (session === capture || pendingCapture) {
 			capture.removeHooks();
 			session = null;
 			pendingCapture = false;
-			setStatus('error', 'Nothing was rendered within 15 seconds. Keep the tab visible and make sure the scene is animating (move the camera if it only renders on demand).');
+			setStatus('error', tr('Nothing was rendered within 15 seconds. Keep the tab visible and make sure the scene is animating (move the camera if it only renders on demand).'));
 		}
 	}, CAPTURE_TIMEOUT_MS);
 
@@ -3538,7 +4149,7 @@ function requestCapture(pick = null) {
 		session = capture;
 		capture.removeHooks = installCaptureHooks(!!capture.pick);
 		capture.startedAt = native.now();
-		setStatus('capturing', 'Recording a frame…');
+		setStatus('capturing', tr('Recording a frame…'));
 		const tick = () => {
 			if (session !== capture)
 				return;
@@ -3560,12 +4171,13 @@ async function finishCapture(capture) {
 	// Only needed while recording; GPU buffer copies in particular can be large
 	for (const context of capture.contexts.values()) {
 		context.bufferCache.clear();
+		context.disposeBakes();
 		context.programs.clear();
 	}
 	capture.uniforms.clear();
 	capture.exactKeys.clear();
 	const progress = (text) => setStatus('exporting', text);
-	setStatus('exporting', `Recorded ${plural(capture.meshes.length, 'mesh', 'meshes')} from ${plural(capture.drawCount, 'draw call')}…`);
+	setStatus('exporting', tr('Recorded {meshes} from {draws}…', { meshes: plural(capture.meshes.length, 'mesh|meshes'), draws: plural(capture.drawCount, 'draw call|draw calls') }));
 	try {
 		const chooser = testHook && typeof testHook.onPreview === 'function' ? testHook.onPreview
 			: viewerApi ? (data) => viewerApi.open(data) : null;
@@ -3574,23 +4186,28 @@ async function finishCapture(capture) {
 		// backgrounds are only downloaded when chosen in the preview
 		let meshes = scene.meshes.filter(mesh => capture.pick ? mesh.picked : !mesh.background);
 		let format = capture.settings.format;
+		let compact = capture.settings.compact;
 		if (previewing) {
-			setStatus('preview', 'Choose what to keep in the page, then press Download.');
+			setStatus('preview', tr('Choose what to keep in the page, then press Download.'));
 			const choice = await chooser(previewData(capture, scene));
 			if (!choice || !choice.selected || !choice.selected.length) {
-				setStatus('idle', 'Cancelled, nothing was downloaded.');
+				setStatus('idle', tr('Cancelled, nothing was downloaded.'));
 				return;
 			}
 			meshes = choice.selected.map(i => scene.meshes[i]).filter(Boolean);
-			if (['glb', 'obj', 'both'].includes(choice.format))
+			if (FORMATS.includes(choice.format))
 				format = choice.format;
+			if (typeof choice.compact === 'boolean')
+				compact = choice.compact;
 			// the other maps of the chosen meshes; textures of meshes that were only shown are never read
 			await readTextures(capture, scene.textures.filter(entry => meshes.some(mesh => mesh.textures.some(t => t.entry === entry))), progress);
 			buildMaterials(meshes);
 		}
-		const result = await writeExport(capture, scene, meshes, format, progress);
+		const result = await writeExport(capture, scene, meshes, format, progress, compact);
 		// for the popup: what was saved, and what was left out and why
 		result.objects = await describeObjects(capture, meshes);
+		result.id = `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+		result.page = { url: location.href, host: location.hostname, title: String(document.title || '').slice(0, 200) };
 		result.leftOut = {
 			gizmos: capture.stats.gizmos,
 			corner: capture.stats.corner,
@@ -3599,13 +4216,14 @@ async function finishCapture(capture) {
 			background: scene.meshes.filter(mesh => mesh.background && !meshes.includes(mesh)).length,
 			unselected: scene.meshes.filter(mesh => !mesh.background && !meshes.includes(mesh)).length
 		};
-		let text = `Saved ${plural(result.meshes, 'mesh', 'meshes')} and ${plural(result.textures, 'texture')}`;
-		text += result.failedTextures ? ` (${plural(result.failedTextures, 'texture')} could not be read).` : '.';
-		setStatus('done', text, result);
+		const counts = { meshes: plural(result.meshes, 'mesh|meshes'), textures: plural(result.textures, 'texture|textures'),
+			failed: plural(result.failedTextures, 'texture|textures'), failedCount: result.failedTextures };
+		setStatus('done', result.failedTextures ? tr('Saved {meshes} and {textures} ({failed} could not be read).', counts)
+			: tr('Saved {meshes} and {textures}.', counts), result);
 	} catch (err) {
 		if (!(err instanceof RipperError))
 			native.warn('[WebGLRipper] Export failed:', err);
-		setStatus('error', err instanceof RipperError ? err.message : `Export failed: ${err && err.message || err}`);
+		setStatus('error', err instanceof RipperError ? err.message : tr('Export failed: {error}', { error: err && err.message || err }));
 	} finally {
 		exporting = false;
 	}
@@ -3631,7 +4249,7 @@ function startPickMode() {
 		return;
 	const canvases = liveContexts().map(gl => gl.canvas).filter(c => c instanceof HTMLCanvasElement && c.isConnected);
 	if (!canvases.length) {
-		setStatus('idle', 'No WebGL content in this frame.');
+		setStatus('idle', tr('No WebGL content in this frame.'));
 		return;
 	}
 	const cursors = canvases.map(canvas => [canvas, canvas.style.cursor]);
@@ -3659,7 +4277,7 @@ function startPickMode() {
 	};
 	const timeout = native.setTimeout(() => {
 		finish();
-		setStatus('idle', 'Pick mode ended.');
+		setStatus('idle', tr('Pick mode ended.'));
 	}, 60000);
 	listen('pointerdown', (event) => {
 		const canvas = webglCanvasAt(event.clientX, event.clientY);
@@ -3697,12 +4315,12 @@ function startPickMode() {
 			return;
 		swallow(event);
 		finish();
-		setStatus('idle', 'Pick mode cancelled.');
+		setStatus('idle', tr('Pick mode cancelled.'));
 	});
 	pickMode = { finish };
 	if (viewerApi)
-		viewerApi.hint('Click the object you want to rip · Esc to cancel');
-	setStatus('picking', 'Click the object you want to rip in the page.');
+		viewerApi.hint(tr('Click the object you want to rip · Esc to cancel'));
+	setStatus('picking', tr('Click the object you want to rip in the page.'));
 }
 
 function onCommand(event) {
@@ -3723,10 +4341,12 @@ function onCommand(event) {
 			break;
 		case 'capture':
 			applySettings(message.settings);
+			useLocale(message.locale);
 			requestCapture();
 			break;
 		case 'pick':
 			applySettings(message.settings);
+			useLocale(message.locale);
 			startPickMode();
 			break;
 	}

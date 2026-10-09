@@ -50,11 +50,13 @@
 			pendingCommand = kind; // settings are still loading, start as soon as they arrive
 			return;
 		}
-		toPage({ type: kind === 'pick' ? 'pick' : 'capture', settings });
+		// the page shows its progress and the preview in the interface language
+		toPage({ type: kind === 'pick' ? 'pick' : 'capture', settings, locale: WebGLRipperI18n.locale() });
 	}
 
 	function applySettings(items) {
 		settings = { ...items, __version: api.runtime.getManifest().version };
+		WebGLRipperI18n.use(settings.language);
 		toPage({ type: 'settings', settings });
 		if (pendingCommand) {
 			const kind = pendingCommand;
@@ -97,8 +99,8 @@
 				engine.text = message.text || '';
 				engine.result = message.result || null;
 				// frames without WebGL answer every command with 'idle'; only real changes go to the toolbar badge
-				// the badge only needs the numbers; thumbnails stay here for the popup
-				const result = message.result ? { ...message.result, objects: undefined } : null;
+				// the badge only needs the numbers; a finished rip goes to the history with its thumbnails
+				const result = message.result && message.state !== 'done' ? { ...message.result, objects: undefined } : message.result || null;
 				if (message.state !== 'idle' || (previous && previous !== 'idle'))
 					toBackground({ type: 'webglripper:state', state: message.state, result });
 				break;

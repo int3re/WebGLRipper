@@ -7,10 +7,11 @@
 ![Chrome 121+](https://img.shields.io/badge/Chrome%20%2F%20Edge-121%2B-4285F4)
 ![Firefox 128+](https://img.shields.io/badge/Firefox-128%2B-FF7139)
 
-A browser extension that **rips 3D models and textures from WebGL pages** and saves them as **GLB (glTF 2.0)** or
-**OBJ + MTL + PNG**, ready for Blender, Unity, Unreal, Godot or any other 3D tool. It records one rendered frame,
-shows what it found in a 3D preview right in the page, and downloads the meshes you choose — with their textures,
-material colors, normals and positions in the scene.
+A browser extension that **rips 3D models and textures from WebGL pages** and saves them as **GLB (glTF 2.0)**,
+**OBJ + MTL + PNG**, **STL** or **USDZ** — ready for Blender, Unity, Unreal, Godot, a 3D printer or AR on an iPhone.
+It records one rendered frame, shows what it found in a 3D preview right in the page, and downloads the meshes you
+choose — with their textures, material colors, normals, positions in the scene and the page's camera. Animated
+characters are saved in the pose you see, and a free Blender add-on opens every rip in Blender by itself.
 
 Works with three.js, Babylon.js, PlayCanvas, Unity WebGL, Godot, Emscripten apps and plain WebGL 1 / WebGL 2 code, in
 Chrome, Edge, Brave, Opera and Firefox.
@@ -19,13 +20,24 @@ Chrome, Edge, Brave, Opera and Firefox.
 
 ## Features
 
-- **GLB or OBJ.** One `.glb` with embedded textures and PBR materials (base color, normal, emissive, occlusion,
-  metal/roughness, colors, transparency), or a ZIP with OBJ, MTL and PNG files — or both.
+- **GLB, OBJ, STL or USDZ.** One `.glb` with embedded textures and PBR materials (base color, normal, emissive,
+  occlusion, metal/roughness, colors, transparency), a ZIP with OBJ, MTL and PNG files, an `.stl` for 3D printing or
+  a `.usdz` for AR on iPhone and iPad. **Smaller GLB** compresses the geometry and stores opaque textures as JPEG: a
+  model with a photo texture went from 760 KB to 136 KB.
+- **Straight into Blender.** The free [Blender add-on](blender/) imports every new rip as soon as it is downloaded,
+  into a collection of its own, framed in the view — with the page's camera when the GLB has one.
+- **Characters in their pose.** On WebGL 2 pages skinned and morphed characters are saved the way they are on the
+  screen, not in the T-pose.
 - **Preview before download.** Turn the scene around, click meshes to include or exclude them, choose the format.
+  Press <kbd>V</kbd> to record a 6-second 360° turntable video of the selection.
 - **Rip one object by clicking it.** Press <kbd>Shift</kbd>+<kbd>Insert</kbd> and click the object: only that object
   is saved. Works through post-processing too.
 - **Ready to import.** The model is centered and stands on the floor, meshes keep their places, missing normals are
-  computed (hard edges stay hard), vertices drawn separately are welded back together.
+  computed (hard edges stay hard), vertices drawn separately are welded back together. GLB files carry the page's
+  camera, so Blender opens the same view.
+- **History of rips.** Every rip with thumbnails, the site and the file; show the file in its folder or open it
+  again.
+- **English and Russian interface**, picked from the browser's language or chosen in the options.
 - **Clean output.** Shadow-map and depth passes, move and axis gizmos, outlines, full-screen post-processing passes
   and duplicate draws are left out automatically; sky domes are offered unselected.
 - **Exact textures.** Saved byte for byte at their real size, including compressed (DXT/S3TC), float, half-float and
@@ -71,15 +83,21 @@ extension's card.
 
 1. Open a page with WebGL content and wait until the model is visible.
 2. Press <kbd>Insert</kbd> (or click the toolbar button → **Rip next frame**).
-3. The preview opens. Click meshes to include or exclude them, choose GLB or OBJ, press **Download** (or
-   <kbd>Enter</kbd>; <kbd>Esc</kbd> cancels).
+3. The preview opens. Click meshes to include or exclude them, choose the format, press **Download** (or
+   <kbd>Enter</kbd>; <kbd>Esc</kbd> cancels). <kbd>V</kbd> records a turntable video of the selection.
 
 **Just one object?** Press <kbd>Shift</kbd>+<kbd>Insert</kbd> (or **Pick object** in the popup) and click it.
 
 The toolbar popup shows what is on the page and what the last rip saved: every object with a thumbnail, its triangles,
 texture and size, and what was left out (gizmos, helpers, shadow passes, backgrounds).
 
-<img src="docs/images/popup.png" width="368" alt="The popup: the WebGL canvas of the page, the last rip with a thumbnail of the saved object, and what was left out">
+<img src="docs/images/popup.png" width="368" alt="The popup: the WebGL canvas of the page, the last rip with thumbnails of the saved objects, and what was left out">
+
+**History** in the popup lists every rip: thumbnails, the site, the numbers and the file. **Show in folder** and
+**Open** find the download again (the browser asks once for access to your downloads). The history keeps the last 50
+rips, only in this browser; turn it off in the options.
+
+<img src="docs/images/history.png" width="760" alt="The history: every rip with its thumbnails, site, format and file, with Show in folder and Open">
 
 The toolbar badge shows **GL** when the page has WebGL content, **PICK** while waiting for your click, **REC** while a
 frame is recorded, **SEL** while the preview is open, and then the number of saved meshes. If a scene only redraws when
@@ -105,16 +123,39 @@ webglripper_<site>_<date>-<time>.zip
 
 In Blender: *File → Import → Wavefront (.obj)*, select all OBJ files (or `scene.obj`).
 
+**STL:** `webglripper_<site>_<date>-<time>.stl` — the selected meshes as one binary STL, Z up, for slicers such as
+PrusaSlicer, Cura or Bambu Studio.
+
+**USDZ:** `webglripper_<site>_<date>-<time>.usdz` — a USD scene with materials and base color textures. Opens in AR
+Quick Look on iPhone and iPad, and in Blender (*File → Import → Universal Scene Description*).
+
+**Video:** `webglripper_<site>_<date>-<time>_turntable.webm` — <kbd>V</kbd> in the preview turns the selected meshes
+once around in 6 seconds.
+
+## Blender add-on
+
+Rips can open in Blender by themselves. Download [`blender/webglripper_blender.py`](blender/webglripper_blender.py),
+install it in Blender (*Edit → Preferences → Add-ons → Install from Disk*) and enable **WebGL Ripper**. From then on,
+every new `webglripper_*` GLB, STL, USDZ or OBJ zip that lands in your downloads folder is imported into a collection
+of its own and framed in the 3D view; the page's camera becomes the scene camera when the scene has none. The panel
+is in the sidebar of the 3D view (<kbd>N</kbd> → **WebGL Ripper**): watch on/off, the folder, **Import latest rip**.
+Details are in [blender/README.md](blender/README.md).
+
 ## Options
 
 | Option | Default | |
 | --- | --- | --- |
+| Language | Automatic | English or Russian; automatic follows the browser. |
+| Keep a history of rips | on | Thumbnails, site and file of the last 50 rips, stored only in this browser. |
 | Hotkey | Insert | Rips the current tab. |
 | Pick hotkey | Shift + Insert | The next click on the page rips only the object under the cursor. |
 | Preview before download | on | Shows the capture in the page so you can choose what to keep. |
 | Skip duplicate draws | on | Ignores geometry drawn again by depth or shadow passes. |
 | Skip viewer overlays | on | Ignores axis gizmos, helpers in a small viewport and post-processing passes. |
-| Format | GLB | GLB, OBJ, or both. |
+| Characters in their current pose | on | Skinned and morphed meshes as they are on the page (WebGL 2). |
+| Format | GLB | GLB, OBJ, both, STL or USDZ. |
+| Smaller GLB | off | Quantized geometry (`KHR_mesh_quantization`) and JPEG for opaque textures. |
+| Include the page's camera | on | Adds the camera the page used to GLB files. |
 | Download OBJ as ZIP | on | One file per capture instead of one download per file. |
 | OBJ layout | One OBJ per mesh | Or a single `scene.obj`, or both. |
 | Place meshes in the scene | on | Applies the model matrix found in the shader. |
@@ -146,8 +187,13 @@ the preview, pick mode, performance and privacy — is in **[How WebGL Ripper wo
 galleries, games made with Unity, Godot or PlayCanvas, three.js and Babylon.js demos. It doesn't work on pages that
 render on a server and stream video, or that draw from a Web Worker with `OffscreenCanvas`.
 
-**Why are some models in a T-pose or without animation?** Characters animated on the GPU (skinning, morph targets) are
-saved in their bind pose: the vertex shader moves the vertices, and the original data is what the page uploaded.
+**Are animated characters saved in their pose?** On WebGL 2 pages, yes: WebGL Ripper runs the page's own vertex
+shader once more with transform feedback and reads back where it moved every vertex. WebGL 1 has no way to read that
+back, so there characters are saved in their bind pose (often a T-pose). Bones and animations are not exported.
+
+**What permissions does it need?** Access to the pages you visit (to find WebGL content and capture it), storage (for
+the settings and the history) and — only when you first press **Show in folder** in the history — access to your
+downloads.
 
 **The export is empty or meshes are in the wrong place.** Enable **Debug logging** and look at `rip-info.json` for the
 attribute and uniform names the page uses, then add them under **Options → Advanced**. Please open an issue with the
@@ -157,7 +203,7 @@ site and the file.
 
 ## Limitations
 
-- GPU-skinned characters are saved in their bind pose; morph targets are not applied.
+- On WebGL 1 pages, GPU-skinned characters are saved in their bind pose. Bones and animations are not exported.
 - WebGL inside a Web Worker (`OffscreenCanvas` transferred to a worker) can't be captured.
 - Instanced draws export one copy of the instanced geometry.
 - `WEBGL_multi_draw` batches don't expose per-object transforms; their meshes stay in local space.
@@ -178,14 +224,17 @@ There is no build step: the repository folder is the extension (`node scripts/bu
 - `webglripper.js` – capture engine, runs in the page (`MAIN` world) at `document_start`
 - `viewer.js` – preview and pick UI, in the page, isolated in a closed shadow root
 - `bridge.js` – content script between the engine and the extension (settings, hotkeys, progress)
-- `background.js` – sends captures to every frame of a tab, toolbar badge, keyboard shortcuts
-- `popup.*`, `options.*`, `ui.css`, `settings.js` – user interface and shared defaults
+- `background.js` – sends captures to every frame of a tab, toolbar badge, keyboard shortcuts, the history
+- `popup.*`, `options.*`, `history.*`, `ui.css`, `settings.js` – user interface and shared defaults
+- `i18n.js`, `_locales/` – English and Russian texts (`node tests/i18n-check.mjs` checks that every text is translated)
+- `blender/` – the Blender add-on
 
 Tests run in real browsers through their automation protocols and need only Node.js 22+:
 
 ```
 node tests/run-chrome.mjs
 node tests/run-firefox.mjs
+node tests/run-blender.mjs
 node tests/compare/compare.mjs --original=<folder of WebGL Ripper 0.6>
 ```
 
@@ -196,5 +245,5 @@ See [CHANGELOG.md](CHANGELOG.md) for what changed in each version.
 Based on [WebGLRipper](https://github.com/Rilshrink/WebGLRipper) by Rilshrink. MIT License.
 
 <sub>Keywords: WebGL ripper, 3D model ripper, extract 3D model from website, download 3D model from a web page, three.js
-model export, Babylon.js export, Unity WebGL model extractor, GLB / glTF exporter, OBJ exporter, Blender import, Chrome
-extension, Firefox add-on.</sub>
+model export, Babylon.js export, Unity WebGL model extractor, GLB / glTF exporter, OBJ exporter, STL for 3D printing,
+USDZ for AR, Blender import, Blender add-on, posed characters, turntable video, Chrome extension, Firefox add-on.</sub>

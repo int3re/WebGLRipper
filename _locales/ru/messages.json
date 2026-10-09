@@ -1,0 +1,14 @@
+{
+	"extensionName": {
+		"message": "WebGL Ripper"
+	},
+	"extensionDescription": {
+		"message": "Сохраняйте 3D-модели и текстуры с WebGL-страниц: GLB, OBJ, STL или USDZ, с 3D-предпросмотром."
+	},
+	"commandCapture": {
+		"message": "Захватить следующий кадр в текущей вкладке"
+	},
+	"commandPick": {
+		"message": "Выбрать один объект в текущей вкладке и сохранить его"
+	}
+}

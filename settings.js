@@ -2,10 +2,15 @@
 'use strict';
 
 const WEBGLRIPPER_DEFAULTS = Object.freeze({
+	language: 'auto',                  // 'auto' (the browser's language) | 'en' | 'ru'
+	keep_history: true,                // Remember the last rips (site, file, thumbnails) for the history page
 	capture_hotkey: 'Insert',          // KeyboardEvent.code, optionally prefixed with Ctrl+/Alt+/Shift+/Meta+
 	pick_hotkey: 'Shift+Insert',       // Enters pick mode: the next click on the page rips the object under the cursor
 	show_preview: true,                // Show the captured meshes in the page and let the user choose before saving
-	export_format: 'glb',              // 'glb' | 'obj' | 'both'
+	export_format: 'glb',              // 'glb' | 'obj' | 'both' | 'stl' | 'usdz'
+	glb_compact: false,                // Quantized geometry and JPEG textures in GLB files
+	export_camera: true,               // Add the page's camera to GLB files
+	bake_poses: true,                  // Save skinned / morphed meshes in the pose seen on the page (WebGL 2)
 	should_download_zip: true,         // One .zip instead of many separate downloads
 	export_layout: 'separate',         // 'separate' | 'combined' | 'both'
 	do_model_view_matrix: true,        // Place meshes using the model matrix found in the shader
@@ -55,7 +60,7 @@ const WebGLRipperHotkey = {
 
 	label(hotkey) {
 		if (!hotkey)
-			return 'None';
+			return 'Not set';
 		return String(hotkey).split('+').map(part => part
 			.replace(/^Key([A-Z])$/, '$1')
 			.replace(/^Digit(\d)$/, '$1')

@@ -13,7 +13,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { addFailures, checkEditorResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
+import { addFailures, checkEditorResults, checkSkinnedResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
 import { build } from '../scripts/build.mjs';
 
 const HEADFUL = process.argv.includes('--headful');
@@ -159,6 +159,17 @@ async function threeTests(bidi, base) {
 	checkEditorResults(editorResults);
 	report('no uncaught page errors', editor.errors.length === 0, editor.errors);
 	await bidi.send('browsingContext.close', { context: editor.context });
+
+	console.log('\n== Posed characters (tests/skinned.html) ==');
+	const skinned = await openTab(bidi, `${base}/tests/skinned.html`);
+	const skinnedResults = await poll(() => evaluate(bidi, skinned.context, 'window.testResults || null'), 30000);
+	if (!skinnedResults) {
+		report('posed characters capture finished', false, skinned.errors);
+		return;
+	}
+	checkSkinnedResults(skinnedResults);
+	report('no uncaught page errors', skinned.errors.length === 0, skinned.errors);
+	await bidi.send('browsingContext.close', { context: skinned.context });
 }
 
 async function extensionTests(bidi, base, downloadDir) {

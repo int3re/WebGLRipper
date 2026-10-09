@@ -12,8 +12,9 @@ import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { addFailures, checkCubeZip, checkEditorResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
+import { addFailures, checkCubeZip, checkEditorResults, checkSkinnedResults, checkLargeExport, checkPickedCube, checkThreeResults, failureCount, poll, report, serve, sleep } from './common.mjs';
 import { build } from '../scripts/build.mjs';
+import { checkTranslations } from './i18n-check.mjs';
 
 const HEADFUL = process.argv.includes('--headful');
 const SKIP_THREE = process.argv.includes('--no-three');
@@ -157,6 +158,17 @@ async function threeTests(devtools, base) {
 	checkEditorResults(editorResults);
 	report('no uncaught page errors', editor.errors.length === 0, editor.errors);
 	await devtools.send('Target.closeTarget', { targetId: editor.targetId });
+
+	console.log('\n== Posed characters (tests/skinned.html) ==');
+	const skinned = await openPage(devtools, `${base}/tests/skinned.html`);
+	const skinnedResults = await poll(() => evaluate(devtools, skinned.sessionId, 'window.testResults || null'), 30000);
+	if (!skinnedResults) {
+		report('posed characters capture finished', false, skinned.errors.concat(skinned.logs.slice(-5)));
+		return;
+	}
+	checkSkinnedResults(skinnedResults);
+	report('no uncaught page errors', skinned.errors.length === 0, skinned.errors);
+	await devtools.send('Target.closeTarget', { targetId: skinned.targetId });
 }
 
 async function extensionTests(devtools, base) {
@@ -179,7 +191,8 @@ async function extensionTests(devtools, base) {
 	// The frame broadcast test downloads right away and checks both formats
 	const settingsPage = await openPage(devtools, `chrome-extension://${extensionId}/options.html`);
 	await sleep(500);
-	await evaluate(devtools, settingsPage.sessionId, `chrome.storage.sync.set({ show_preview: false, export_format: 'both' })`);
+	// English first (Chrome follows the system language otherwise); the Russian interface is checked further down
+	await evaluate(devtools, settingsPage.sessionId, `chrome.storage.sync.set({ show_preview: false, export_format: 'both', language: 'en' })`);
 
 	const downloadDir = fs.mkdtempSync(path.join(os.tmpdir(), 'webglripper-downloads-'));
 	const downloads = new Map();
@@ -248,6 +261,13 @@ async function extensionTests(devtools, base) {
 			const { data } = await devtools.send('Page.captureScreenshot', { format: 'png' }, single.sessionId);
 			fs.writeFileSync(path.join(process.env.WEBGLRIPPER_SCREENSHOTS, 'preview-chrome.png'), Buffer.from(data, 'base64'));
 		}
+		// V records a turntable video of the selection
+		const beforeVideo = downloads.size;
+		for (const type of ['keyDown', 'keyUp'])
+			await devtools.send('Input.dispatchKeyEvent', { type, key: 'v', code: 'KeyV', text: type === 'keyDown' ? 'v' : undefined, windowsVirtualKeyCode: 86, nativeVirtualKeyCode: 86 }, single.sessionId);
+		const video = await poll(() => Array.from(downloads.entries()).slice(beforeVideo).find(([, d]) => d.done && d.name.endsWith('.webm')), 20000);
+		const webm = video ? fs.readFileSync(path.join(downloadDir, video[0])) : Buffer.alloc(0);
+		report('V in the preview records a turntable video (WebM)', webm.length > 2000 && webm.readUInt32BE(0) === 0x1A45DFA3, video ? { name: video[1].name, bytes: webm.length } : Array.from(downloads.values()));
 		for (const type of ['keyDown', 'keyUp'])
 			await devtools.send('Input.dispatchKeyEvent', { type, key: 'Enter', code: 'Enter', windowsVirtualKeyCode: 13, nativeVirtualKeyCode: 13 }, single.sessionId);
 		const glb = await poll(() => Array.from(downloads.entries()).slice(before).find(([, d]) => d.done && d.name.endsWith('.glb')), 20000);
@@ -287,6 +307,79 @@ async function extensionTests(devtools, base) {
 		/12 triangles · \d+×\d+ texture/.test(shown.objects[0].info) && /^1 object · GLB/.test(shown.meta) && /^Saved 1 mesh and 1 texture\.$/.test(shown.status), shown);
 	report('no errors in the popup after a rip', found.errors.length === 0, found.errors);
 	await devtools.send('Target.closeTarget', { targetId: found.targetId });
+
+	// The history keeps every finished rip: site, file, numbers and thumbnails
+	const historyPage = await openPage(devtools, `chrome-extension://${extensionId}/history.html`);
+	const rips = await poll(() => evaluate(devtools, historyPage.sessionId, `(() => {
+		const items = Array.from(document.querySelectorAll('#rips .rip'));
+		return items.length >= 4 ? items.map(item => ({
+			host: item.querySelector('.host').textContent, thumbnails: item.querySelectorAll('img.thumb').length,
+			facts: item.querySelector('.facts').textContent, file: item.querySelector('.filename').textContent
+		})) : null;
+	})()`), 5000);
+	report('history lists every rip with its site, file and thumbnail', !!rips && rips.length === 4 && rips[0].host === '127.0.0.1' &&
+		rips[0].thumbnails === 1 && rips[0].facts === '1 object · 1 texture · GLB' && /^webglripper_.+\.glb$/.test(rips[0].file) &&
+		rips.filter(rip => /\.zip$/.test(rip.file)).length === 2, rips);
+	const listed = await evaluate(devtools, historyPage.sessionId, `document.querySelectorAll('#rips .rip').length`);
+	await evaluate(devtools, historyPage.sessionId, `document.querySelector('#rips .rip .remove').click()`);
+	report('a rip can be removed from the history', listed === 4 && !!await poll(() => evaluate(devtools, historyPage.sessionId, `document.querySelectorAll('#rips .rip').length === 3`), 3000), listed);
+	report('no errors on the history page', historyPage.errors.length === 0, historyPage.errors);
+	await devtools.send('Target.closeTarget', { targetId: historyPage.targetId });
+
+	// Russian interface: the page (pick hint, progress, result), the popup, the options and the history
+	await evaluate(devtools, settingsPage.sessionId, `chrome.storage.sync.set({ language: 'ru' })`);
+	await sleep(300);
+	await evaluate(devtools, single.sessionId, `(window.__texts = [], document.addEventListener('webglripper:ext', (e) => { const m = JSON.parse(e.detail); if (m.type === 'state') window.__texts.push(m.text); }), true)`);
+	await devtools.send('Page.bringToFront', {}, single.sessionId);
+	for (const type of ['keyDown', 'keyUp'])
+		await devtools.send('Input.dispatchKeyEvent', { type, key: 'Insert', code: 'Insert', windowsVirtualKeyCode: 45, nativeVirtualKeyCode: 45, modifiers: type === 'keyDown' ? 8 : 0 }, single.sessionId);
+	await poll(() => evaluate(devtools, single.sessionId, `window.__states.filter(s => s === 'picking').length === 3`), 5000);
+	for (const type of ['mouseMoved', 'mousePressed', 'mouseReleased'])
+		await devtools.send('Input.dispatchMouseEvent', { type, x: center.x, y: center.y, button: 'left', buttons: type === 'mousePressed' ? 1 : 0, clickCount: 1 }, single.sessionId);
+	const saved = await poll(() => evaluate(devtools, single.sessionId, `window.__texts.find(text => /^Сохранено/.test(text)) || null`), 20000);
+	const texts = await evaluate(devtools, single.sessionId, 'window.__texts');
+	report('the page speaks Russian: pick mode, progress and the result', saved === 'Сохранено: 1 меш и 1 текстура.' &&
+		texts.includes('Щёлкните на странице объект, который нужно сохранить.') && texts.some(text => /^Записано: 1 меш из \d+ вызов/.test(text)), texts);
+
+	const ruPopup = await openPage(devtools, `chrome-extension://${extensionId}/popup.html?tab=${frameTab.id}`);
+	const ruShown = await poll(() => evaluate(devtools, ruPopup.sessionId, `document.getElementById('last').hidden ? null : ({
+		lang: document.documentElement.lang, button: document.getElementById('capture').textContent, pick: document.getElementById('pick').textContent,
+		heading: document.querySelector('#last h2').textContent, meta: document.getElementById('last-meta').textContent,
+		info: document.querySelector('#objects .info').textContent, status: document.getElementById('status-text').textContent,
+		links: document.querySelector('footer .links').textContent
+	})`), 5000);
+	report('popup in Russian', !!ruShown && ruShown.lang === 'ru' && ruShown.button === 'Захватить кадр' && ruShown.pick === 'Выбрать объект' &&
+		ruShown.heading === 'Последний рип' && ruShown.meta === '1 объект · GLB · 1 текстура' && /^12 треугольников · текстура \d+×\d+/.test(ruShown.info) &&
+		ruShown.status === 'Сохранено: 1 меш и 1 текстура.' && ruShown.links === 'История · Настройки', ruShown);
+	report('no errors in the Russian popup', ruPopup.errors.length === 0, ruPopup.errors);
+	await devtools.send('Target.closeTarget', { targetId: ruPopup.targetId });
+
+	const ruOptions = await openPage(devtools, `chrome-extension://${extensionId}/options.html`);
+	const ruOptionsShown = await poll(() => evaluate(devtools, ruOptions.sessionId, `document.documentElement.classList.contains('i18n-pending') ? null : ({
+		title: document.title, sections: Array.from(document.querySelectorAll('h2'), h => h.textContent), language: document.getElementById('language').value,
+		version: document.getElementById('version').textContent, placeholder: document.getElementById('extra_position_names').placeholder
+	})`), 5000);
+	report('options in Russian', !!ruOptionsShown && ruOptionsShown.title === 'Настройки WebGL Ripper' && ruOptionsShown.language === 'ru' &&
+		ruOptionsShown.sections.join(',') === 'Интерфейс,Захват,Вывод,Текстуры,Дополнительно' && /^Версия \d/.test(ruOptionsShown.version) &&
+		ruOptionsShown.placeholder === 'например, in_ATTRIBUTE0', ruOptionsShown);
+	report('no errors on the Russian options page', ruOptions.errors.length === 0, ruOptions.errors);
+	await devtools.send('Target.closeTarget', { targetId: ruOptions.targetId });
+
+	const ruHistory = await openPage(devtools, `chrome-extension://${extensionId}/history.html`);
+	const ruRips = await poll(() => evaluate(devtools, ruHistory.sessionId, `document.querySelectorAll('#rips .rip').length === 4 ? ({
+		title: document.querySelector('h1').textContent, summary: document.getElementById('summary').textContent,
+		facts: document.querySelector('#rips .facts').textContent, show: document.querySelector('#rips .file button').textContent
+	}) : null`), 5000);
+	report('history in Russian, newest rip first', !!ruRips && ruRips.title === 'История рипов' && ruRips.summary === '4 рипа' &&
+		ruRips.facts === '1 объект · 1 текстура · GLB' && ruRips.show === 'Показать в папке', ruRips);
+	await evaluate(devtools, ruHistory.sessionId, `document.getElementById('clear').click()`);
+	await evaluate(devtools, ruHistory.sessionId, `document.getElementById('clear').click()`);
+	const cleared = await poll(() => evaluate(devtools, ruHistory.sessionId, `!document.getElementById('empty').hidden && !document.querySelector('#rips .rip')
+		? document.getElementById('empty').textContent.replace(/\\s+/g, ' ').trim() : null`), 3000);
+	report('the history can be cleared', cleared === 'Пока ничего не сохранено. Нажмите Insert на странице с 3D или кнопку расширения на панели инструментов.', cleared);
+	report('no errors on the Russian history page', ruHistory.errors.length === 0, ruHistory.errors);
+	await devtools.send('Target.closeTarget', { targetId: ruHistory.targetId });
+	await evaluate(devtools, settingsPage.sessionId, `chrome.storage.sync.set({ language: 'auto' })`);
 
 	// Options page
 	const options = await openPage(devtools, `chrome-extension://${extensionId}/options.html`);
@@ -348,6 +441,9 @@ async function main() {
 	try {
 		const version = await devtools.send('Browser.getVersion');
 		console.log(`Using ${version.product}`);
+		console.log('\n== Translations ==');
+		const translations = checkTranslations();
+		report(`every interface text is translated (${translations.texts} texts)`, translations.problems.length === 0, translations.problems);
 		await engineTests(devtools, base);
 		await largeExportTest(devtools, base);
 		if (!SKIP_THREE)

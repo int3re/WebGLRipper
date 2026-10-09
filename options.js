@@ -1,11 +1,15 @@
-(function () {
+(async function () {
 	'use strict';
 
 	const api = globalThis.browser || globalThis.chrome;
 	const $ = (id) => document.getElementById(id);
 	const CHECKBOXES = ['skip_duplicates', 'skip_overlays', 'show_preview', 'should_download_zip', 'do_model_view_matrix',
-		'center_model', 'compute_normals', 'export_vertex_colors', 'weld_vertices', 'unflip_textures', 'is_debug_mode'];
-	const SELECTS = ['export_format', 'export_layout', 'default_texture_res'];
+		'center_model', 'compute_normals', 'export_vertex_colors', 'weld_vertices', 'unflip_textures', 'is_debug_mode',
+		'glb_compact', 'export_camera', 'bake_poses', 'keep_history'];
+	const SELECTS = ['language', 'export_format', 'export_layout', 'default_texture_res'];
+	const i18n = WebGLRipperI18n;
+	const t = (text, values) => i18n.t(text, values);
+	await i18n.load();
 	const HOTKEYS = { capture_hotkey: 'hotkey-record', pick_hotkey: 'pick-hotkey-record' };
 	const TEXTS = ['extra_position_names', 'extra_normal_names', 'extra_uv_names', 'extra_texture_names', 'extra_matrix_names'];
 
@@ -27,7 +31,7 @@
 		for (const [setting, id] of Object.entries(HOTKEYS)) {
 			const button = $(id);
 			button.classList.toggle('recording', recording === setting);
-			button.textContent = recording === setting ? 'Press a key… (Esc to cancel)' : WebGLRipperHotkey.label(hotkeys[setting]);
+			button.textContent = recording === setting ? t('Press a key… (Esc to cancel)') : t(WebGLRipperHotkey.label(hotkeys[setting]));
 		}
 	}
 
@@ -54,6 +58,13 @@
 		$(id).addEventListener('change', () => save({ [id]: $(id).checked }));
 	for (const id of SELECTS)
 		$(id).addEventListener('change', () => save({ [id]: $(id).value }));
+	function applyLanguage(setting) {
+		i18n.use(setting);
+		i18n.translate(document);
+		$('version').textContent = t('Version {version}', { version: api.runtime.getManifest().version });
+		renderHotkeys();
+	}
+	$('language').addEventListener('change', () => applyLanguage($('language').value));
 	for (const id of TEXTS) {
 		let timer = 0;
 		$(id).addEventListener('input', () => {
@@ -96,9 +107,10 @@
 	}, true);
 
 	$('reset').addEventListener('click', () => {
-		api.storage.sync.clear().then(() => api.storage.sync.set({ ...WEBGLRIPPER_DEFAULTS })).then(load).then(flashSaved);
+		api.storage.sync.clear().then(() => api.storage.sync.set({ ...WEBGLRIPPER_DEFAULTS })).then(load).then(flashSaved)
+			.then(() => applyLanguage(WEBGLRIPPER_DEFAULTS.language));
 	});
 
-	$('version').textContent = `Version ${api.runtime.getManifest().version}`;
+	$('version').textContent = t('Version {version}', { version: api.runtime.getManifest().version });
 	load();
 })();

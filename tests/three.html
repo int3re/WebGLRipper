@@ -158,7 +158,59 @@
 				objects: pickedObjs.length,
 				vertices: pickedObjs[0] ? pickedObjs[0].split('\n').filter(l => l.startsWith('v ')).length : 0
 			};
-			window.testResults = { state: result.state, text: result.text, meshes, mtl, glb, pick, files: T.downloads.map(d => d.name) };
+			// The other formats: compact GLB with the page's camera, STL, USDZ
+			const exportAs = async (settings) => {
+				T.downloads.length = 0;
+				const finished = new Promise(resolve => {
+					document.addEventListener('webglripper:ext', function listener(event) {
+						const message = JSON.parse(event.detail);
+						if (message.type === 'state' && ['done', 'error', 'idle'].includes(message.state)) {
+							document.removeEventListener('webglripper:ext', listener);
+							resolve(message);
+						}
+					});
+				});
+				document.dispatchEvent(new CustomEvent('webglripper:page', {
+					detail: JSON.stringify({ type: 'capture', settings: { show_preview: false, center_model: false, __version: 'test', ...settings } })
+				}));
+				await finished;
+				return T.downloads[0] ? new Uint8Array(await T.downloads[0].blob.arrayBuffer()) : new Uint8Array(0);
+			};
+			const formats = {};
+			try {
+				const bytes = await exportAs({ export_format: 'glb', glb_compact: true, export_camera: true });
+				const json = JSON.parse(new TextDecoder().decode(bytes.subarray(20, 20 + new DataView(bytes.buffer).getUint32(12, true))));
+				const gltf = await new GLTFLoader().parseAsync(bytes.buffer, '');
+				const centers = [];
+				gltf.scene.updateMatrixWorld(true);
+				gltf.scene.traverse(object => {
+					if (object.isMesh) {
+						const box = new THREE.Box3().setFromObject(object);
+						centers.push([0, 1, 2].map(k => +((box.min.getComponent(k) + box.max.getComponent(k)) / 2).toFixed(2)));
+					}
+				});
+				formats.compact = { quantized: (json.extensionsRequired || []).includes('KHR_mesh_quantization'), camera: json.cameras && json.cameras[0],
+					cameraNode: json.nodes.find(n => n.camera !== undefined), loadedCameras: gltf.cameras.length, centers, bytes: bytes.length };
+				const stl = await exportAs({ export_format: 'stl' });
+				formats.stl = { triangles: stl.length > 84 ? new DataView(stl.buffer).getUint32(80, true) : 0, bytes: stl.length };
+				const usdz = await exportAs({ export_format: 'usdz' });
+				const view = new DataView(usdz.buffer), files = [];
+				for (let p = 0; p + 30 <= usdz.length && view.getUint32(p, true) === 0x04034B50;) {
+					const nameLength = view.getUint16(p + 26, true), extra = view.getUint16(p + 28, true), size = view.getUint32(18 + p, true);
+					const data = p + 30 + nameLength + extra;
+					files.push({ name: new TextDecoder().decode(usdz.subarray(p + 30, p + 30 + nameLength)), aligned: data % 64 === 0, size });
+					p = data + size;
+				}
+				formats.usdz = { files, header: new TextDecoder().decode(usdz.subarray(0, 0)) };
+				const first = files[0];
+				if (first) {
+					const start = 30 + first.name.length + view.getUint16(28, true);
+					formats.usdz.layer = new TextDecoder().decode(usdz.subarray(start, start + 200));
+				}
+			} catch (err) {
+				formats.error = String(err && err.stack || err);
+			}
+			window.testResults = { state: result.state, text: result.text, meshes, mtl, glb, pick, formats, files: T.downloads.map(d => d.name) };
 			document.getElementById('log').textContent = JSON.stringify(window.testResults, null, 2);
 		}
 		run();

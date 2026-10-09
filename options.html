@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="en" class="i18n-pending">
 <head>
 	<meta charset="utf-8">
 	<title>WebGL Ripper Options</title>
@@ -13,6 +13,31 @@
 			<span id="version" class="muted"></span>
 		</div>
 	</header>
+
+	<section>
+		<h2>Interface</h2>
+		<div class="row">
+			<label class="label" for="language">
+				<span>Language</span>
+				<span>The language of the popup, the preview and these settings.</span>
+			</label>
+			<select id="language">
+				<option value="auto">Automatic (browser language)</option>
+				<option value="en">English</option>
+				<option value="ru">Русский</option>
+			</select>
+		</div>
+		<div class="row">
+			<label class="label" for="keep_history">
+				<span>Keep a history of rips</span>
+				<span>Remembers what you ripped and where, with thumbnails. Stored only in this browser.</span>
+			</label>
+			<div class="inline">
+				<a href="history.html" id="open-history">Open history</a>
+				<input type="checkbox" id="keep_history">
+			</div>
+		</div>
+	</section>
 
 	<section>
 		<h2>Capture</h2>
@@ -57,6 +82,13 @@
 			</label>
 			<input type="checkbox" id="skip_overlays">
 		</div>
+		<div class="row">
+			<label class="label" for="bake_poses">
+				<span>Characters in their current pose</span>
+				<span>Saves animated characters as they are on the page, not in the T-pose (WebGL 2 pages).</span>
+			</label>
+			<input type="checkbox" id="bake_poses">
+		</div>
 	</section>
 
 	<section>
@@ -70,7 +102,30 @@
 				<option value="glb">GLB</option>
 				<option value="obj">OBJ</option>
 				<option value="both">GLB + OBJ</option>
+				<option value="stl">STL (3D printing)</option>
+				<option value="usdz">USDZ (AR on iPhone)</option>
 			</select>
+		</div>
+		<div class="row">
+			<label class="label" for="glb_compact">
+				<span>Smaller GLB</span>
+				<span>Compressed geometry and JPEG textures: often several times smaller. Objects import with a scale.</span>
+			</label>
+			<input type="checkbox" id="glb_compact">
+		</div>
+		<div class="row">
+			<label class="label" for="export_camera">
+				<span>Include the page's camera</span>
+				<span>Adds the camera the page used to GLB files, so Blender opens the same view.</span>
+			</label>
+			<input type="checkbox" id="export_camera">
+		</div>
+		<div class="row">
+			<div class="label">
+				<span>Open rips in Blender</span>
+				<span>The free add-on imports every new rip into Blender as soon as it is downloaded.</span>
+			</div>
+			<a href="https://github.com/int3re/WebGLRipper/tree/main/blender#readme" target="_blank" rel="noopener">Get the add-on</a>
 		</div>
 		<div class="row">
 			<label class="label" for="should_download_zip">
@@ -191,6 +246,7 @@
 	</div>
 
 	<script src="settings.js"></script>
+	<script src="i18n.js"></script>
 	<script src="options.js"></script>
 </body>
 </html>

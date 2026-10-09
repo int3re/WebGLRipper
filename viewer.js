@@ -61,13 +61,15 @@ h1 { margin: 0; font-size: 15px; font-weight: 600; }
 .item .badge.muted { color: #c4c9d2; background: #3c4048; }
 input[type="checkbox"] { width: 16px; height: 16px; accent-color: #8ab4f8; flex: none; margin: 0; }
 .section { padding: 12px 16px 0; color: #9aa0a6; font-size: 12px; }
-.format { display: flex; gap: 4px; padding: 6px 16px 0; }
+.format { display: grid; grid-template-columns: repeat(3, 1fr); gap: 4px; padding: 6px 16px 0; }
+.compact { display: flex; align-items: center; gap: 8px; padding: 10px 16px 0; color: #c4c9d2; font-size: 12px; cursor: pointer; }
+.compact.disabled { opacity: .45; cursor: default; }
 @media (max-width: 720px) {
 	.backdrop { flex-direction: column; }
 	aside { width: auto; max-height: 60%; border-left: none; border-top: 1px solid #30333a; }
 	.stage .help { display: none; }
 }
-.format button { flex: 1; }
+.format button { min-width: 0; padding: 6px 4px; }
 .format button.on { background: #8ab4f8; border-color: #8ab4f8; color: #13161a; font-weight: 600; }
 .actions { display: flex; gap: 8px; padding: 14px 16px 16px; }
 button { font: inherit; color: #e8eaed; background: #2a2d33; border: 1px solid #3c4048; border-radius: 8px;
@@ -111,13 +113,16 @@ function createHost(extraClass) {
 }
 
 const formatCount = (n) => n.toLocaleString('en-US').replace(/,/g, ' ');
+// the interface language, from the engine (English when bridge.js sent no translations)
+const t = (text, values) => registry.t(text, values);
+const plural = (n, forms) => registry.plural(n, forms);
 const formatLength = (n) => (n >= 100 ? String(Math.round(n)) : String(Number(n.toPrecision(3))));
 
 /* The second line of a list row: triangles, base color texture, size. */
 function describeMesh(mesh, entry) {
-	const parts = [`${formatCount(mesh.triangleCount)} tris`];
+	const parts = [t('{count} tris', { count: formatCount(mesh.triangleCount) })];
 	if (mesh.textureWidth)
-		parts.push(`${mesh.textureWidth}×${mesh.textureHeight} texture`);
+		parts.push(t('{size} texture', { size: `${mesh.textureWidth}×${mesh.textureHeight}` }));
 	if (entry && entry.lo[0] <= entry.hi[0]) {
 		const size = [0, 1, 2].map(k => entry.hi[k] - entry.lo[k]);
 		const largest = Math.max(...size);
@@ -495,10 +500,10 @@ class View {
 		gl.uniform1f(u.alpha, 0.22);
 		gl.bindVertexArray(this.grid.vao);
 		gl.drawArrays(gl.LINES, 0, this.grid.count);
-		// meshes that won't be downloaded stay visible as ghosts
+		// meshes that won't be downloaded stay visible as ghosts (not in the turntable video)
 		gl.uniform3f(u.tint, 0.54, 0.71, 0.97);
 		for (const mesh of this.meshes) {
-			if (!mesh.source.selected)
+			if (!mesh.source.selected && !this.recording)
 				this.drawMesh(mesh, mesh.index === this.hover ? 0.5 : 0.14, mesh.index === this.hover ? 0.5 : 0);
 		}
 		gl.depthMask(true);
@@ -688,6 +693,45 @@ function drawThumbnail(canvas, view, entry, render) {
 	context.fillRect(0, 0, canvas.width, canvas.height);
 }
 
+/* Turns the camera once around the selected meshes and records the canvas as WebM. */
+function recordTurntable(view, canvas, onProgress, seconds = 6) {
+	return new Promise((resolve, reject) => {
+		const stream = canvas.captureStream(30);
+		const type = ['video/webm;codecs=vp9', 'video/webm;codecs=vp8', 'video/webm'].find(t => MediaRecorder.isTypeSupported(t)) || '';
+		const recorder = new MediaRecorder(stream, type ? { mimeType: type, videoBitsPerSecond: 8000000 } : { videoBitsPerSecond: 8000000 });
+		const chunks = [];
+		recorder.ondataavailable = (event) => {
+			if (event.data && event.data.size)
+				chunks.push(event.data);
+		};
+		recorder.onerror = (event) => reject(event.error || new Error('recording failed'));
+		recorder.onstop = () => {
+			for (const track of stream.getTracks())
+				track.stop();
+			resolve(chunks.length ? new Blob(chunks, { type: 'video/webm' }) : null);
+		};
+		view.hover = -1;
+		view.frame(false);
+		view.recording = true;
+		const yaw = view.yaw, start = performance.now();
+		recorder.start(500);
+		const step = () => {
+			const t = Math.min(1, (performance.now() - start) / (seconds * 1000));
+			view.yaw = yaw + t * Math.PI * 2;
+			view.render();
+			onProgress(Math.ceil(seconds * (1 - t)));
+			if (t < 1 && !view.disposed) {
+				native.requestAnimationFrame(step);
+				return;
+			}
+			view.recording = false;
+			view.yaw = yaw;
+			recorder.stop();
+		};
+		native.requestAnimationFrame(step);
+	});
+}
+
 function open(data) {
 	return new Promise(resolve => {
 		// Overlays can't be seen on top of a fullscreen element, and a locked pointer can't reach them
@@ -705,47 +749,57 @@ function open(data) {
 		const stage = element('div', 'stage');
 		const canvas = element('canvas');
 		canvas.tabIndex = 0;
-		append(stage, canvas, element('div', 'brand', 'WebGL Ripper · Preview'),
-			element('div', 'help', 'Drag to orbit · right-drag or Shift-drag to pan · wheel to zoom · click a mesh to include or exclude it · double-click to frame'));
+		append(stage, canvas, element('div', 'brand', t('WebGL Ripper · Preview')),
+			element('div', 'help', t('Drag to orbit · right-drag or Shift-drag to pan · wheel to zoom · click a mesh to include or exclude it · double-click to frame')));
 		const aside = element('aside');
 		const header = element('header');
-		const title = element('h1', '', `${data.meshes.length} mesh${data.meshes.length === 1 ? '' : 'es'} from ${data.title}`);
+		const title = element('h1', '', t('{meshes} from {page}', { meshes: plural(data.meshes.length, 'mesh|meshes'), page: data.title }));
 		const meta = element('div', 'meta');
 		append(header, title, meta);
 		const tools = element('div', 'tools');
-		const allButton = element('button', '', 'All');
-		const noneButton = element('button', '', 'None');
-		const invertButton = element('button', '', 'Invert');
-		const frameButton = element('button', '', 'Frame');
-		append(tools, allButton, noneButton, invertButton, frameButton);
+		const allButton = element('button', '', t('All'));
+		const noneButton = element('button', '', t('None'));
+		const invertButton = element('button', '', t('Invert'));
+		const frameButton = element('button', '', t('Frame'));
+		const videoButton = element('button', '', t('Video'));
+		videoButton.title = t('Record a 360° turntable of the selected meshes as a WebM video (V)');
+		append(tools, allButton, noneButton, invertButton, frameButton, videoButton);
 		const list = element('div', 'list');
-		const formatLabel = element('div', 'section', 'Format');
+		const formatLabel = element('div', 'section', t('Format'));
 		const formats = element('div', 'format');
-		const formatButtons = [['glb', 'GLB'], ['obj', 'OBJ'], ['both', 'GLB + OBJ']].map(([value, label]) => {
+		const formatButtons = [['glb', 'GLB', 'One file with textures and materials'], ['obj', 'OBJ', 'OBJ, MTL and PNG files'],
+			['both', 'GLB + OBJ', 'Both'], ['stl', 'STL', 'For 3D printing: geometry only'],
+			['usdz', 'USDZ', 'For augmented reality on iPhone and iPad']].map(([value, label, tip]) => {
 			const button = element('button', '', label);
 			button.dataset.value = value;
+			button.title = t(tip);
 			append(formats, button);
 			return button;
 		});
+		const compactLabel = element('label', 'compact');
+		const compactBox = element('input');
+		compactBox.type = 'checkbox';
+		compactBox.checked = !!data.compact;
+		append(compactLabel, compactBox, document.createTextNode(t('Smaller GLB (compressed geometry, JPEG textures)')));
 		const actions = element('div', 'actions');
-		const cancelButton = element('button', '', 'Cancel');
-		const downloadButton = element('button', 'primary', 'Download');
+		const cancelButton = element('button', '', t('Cancel'));
+		const downloadButton = element('button', 'primary', t('Download'));
 		append(actions, cancelButton, downloadButton);
-		append(aside, header, tools, list, formatLabel, formats, actions);
+		append(aside, header, tools, list, formatLabel, formats, compactLabel, actions);
 		append(backdrop, stage, aside);
 		append(root, backdrop);
 
 		const view = new View(canvas, data);
 		if (!view.gl)
-			append(stage, element('div', 'fallback', '3D preview is not available in this browser. The list still works.'));
+			append(stage, element('div', 'fallback', t('3D preview is not available in this browser. The list still works.')));
 		let format = data.format;
 		const items = [];
 
 		const refresh = () => {
 			const selected = data.meshes.filter(mesh => mesh.selected);
 			const triangles = selected.reduce((sum, mesh) => sum + mesh.triangleCount, 0);
-			meta.textContent = `${selected.length} selected · ${formatCount(triangles)} triangles`;
-			downloadButton.textContent = selected.length ? `Download ${selected.length}` : 'Download';
+			meta.textContent = t('{selected} selected · {triangles}', { selected: selected.length, triangles: plural(triangles, 'triangle|triangles') });
+			downloadButton.textContent = selected.length ? t('Download {n}', { n: selected.length }) : t('Download');
 			downloadButton.disabled = !selected.length;
 			for (const [index, item] of items.entries()) {
 				item.checkbox.checked = data.meshes[index].selected;
@@ -754,6 +808,9 @@ function open(data) {
 			}
 			for (const button of formatButtons)
 				button.classList.toggle('on', button.dataset.value === format);
+			const glb = format === 'glb' || format === 'both';
+			compactBox.disabled = !glb;
+			compactLabel.classList.toggle('disabled', !glb);
 			view.request();
 		};
 		const toggle = (index) => {
@@ -814,9 +871,9 @@ function open(data) {
 			const text = element('div', 'text');
 			const name = element('div', 'name', mesh.name);
 			if (mesh.picked)
-				append(name, element('span', 'badge', 'picked'));
+				append(name, element('span', 'badge', t('picked')));
 			else if (mesh.background)
-				append(name, element('span', 'badge muted', 'background'));
+				append(name, element('span', 'badge muted', t('background')));
 			append(text, name, element('div', 'info', describeMesh(mesh, view.meshes[index])));
 			append(row, checkbox, thumb, text);
 			append(list, row);
@@ -845,6 +902,31 @@ function open(data) {
 		noneButton.addEventListener('click', () => { data.meshes.forEach(m => { m.selected = false; }); refresh(); });
 		invertButton.addEventListener('click', () => { data.meshes.forEach(m => { m.selected = !m.selected; }); refresh(); });
 		frameButton.addEventListener('click', () => view.frame());
+		let recording = false;
+		const record = async () => {
+			if (recording || !view.gl || typeof canvas.captureStream !== 'function' || typeof window.MediaRecorder !== 'function' ||
+				!data.meshes.some(mesh => mesh.selected))
+				return;
+			recording = true;
+			for (const button of [allButton, noneButton, invertButton, frameButton, videoButton, downloadButton])
+				button.disabled = true;
+			try {
+				const blob = await recordTurntable(view, canvas, (left) => { videoButton.textContent = t('● {left} s', { left }); });
+				if (blob && !closed) {
+					const stamp = new Date().toISOString().replace(/[-:]/g, '').replace('T', '-').slice(0, 15);
+					registry.saveFile(`webglripper_${location.hostname || 'page'}_${stamp}_turntable.webm`, blob);
+				}
+			} catch (err) {
+				// recording is not available here; the preview keeps working
+			} finally {
+				recording = false;
+				videoButton.textContent = t('Video');
+				for (const button of [allButton, noneButton, invertButton, frameButton, videoButton])
+					button.disabled = false;
+				refresh();
+			}
+		};
+		videoButton.addEventListener('click', record);
 		for (const button of formatButtons) {
 			button.addEventListener('click', () => {
 				format = button.dataset.value;
@@ -912,10 +994,12 @@ function open(data) {
 			'wheel', 'contextmenu', 'touchstart', 'touchmove', 'touchend', 'keydown', 'keyup', 'keypress'])
 			host.addEventListener(type, (event) => event.stopPropagation());
 		const onKey = (event) => {
-			if (event.key === 'Escape')
+			if (event.key === 'Escape' && !recording)
 				close(null);
 			else if (event.key === 'Enter' && !downloadButton.disabled)
 				finish();
+			else if ((event.key === 'v' || event.key === 'V') && !event.ctrlKey && !event.metaKey && !event.altKey)
+				record();
 			else
 				return;
 			event.preventDefault();
@@ -940,7 +1024,8 @@ function open(data) {
 		};
 		const finish = () => close({
 			selected: data.meshes.map((mesh, index) => (mesh.selected ? index : -1)).filter(index => index >= 0),
-			format
+			format,
+			compact: compactBox.checked
 		});
 		downloadButton.addEventListener('click', finish);
 		cancelButton.addEventListener('click', () => close(null));
