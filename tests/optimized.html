@@ -67,7 +67,9 @@
 		map.colorSpace = THREE.SRGBColorSpace;
 		const roughnessMap = texture(() => [0, 200, 0, 255]);   // three.js reads roughness from G
 		const metalnessMap = texture(() => [0, 0, 50, 255]);    // and metalness from B
-		const model = new THREE.Mesh(geometry, new THREE.MeshStandardMaterial({ map, roughnessMap, metalnessMap, roughness: 1, metalness: 1 }));
+		// glTF KHR_materials_specular as GLTFLoader sets it up: a physical material with a strong specular color
+		const model = new THREE.Mesh(geometry, new THREE.MeshPhysicalMaterial({ map, roughnessMap, metalnessMap, roughness: 1, metalness: 1,
+			specularIntensity: 1, specularColor: new THREE.Color().setRGB(2, 2, 2) }));
 		model.scale.setScalar(1 / 30000);
 		model.position.set(-1, -1, -1);
 		model.castShadow = true;
@@ -127,6 +129,7 @@
 						uv: { lo: lo.map(v => +v.toFixed(3)), hi: hi.map(v => +v.toFixed(3)) },
 						size: [box.max.x - box.min.x, box.max.y - box.min.y, box.max.z - box.min.z].map(v => +v.toFixed(3)),
 						map: !!m.map, roughness: m.roughness, metalness: m.metalness,
+						specular: m.specularColor ? [m.specularColor.r, m.specularColor.g, m.specularColor.b].map(v => +v.toFixed(3)) : null,
 						metalRough: m.roughnessMap && m.roughnessMap === m.metalnessMap ? pixel(m.roughnessMap) : null
 					});
 				});

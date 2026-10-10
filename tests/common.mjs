@@ -177,6 +177,8 @@ export function checkOptimizedResults(results) {
 		mesh.uv.lo.every(v => Math.abs(v) < 0.01) && mesh.uv.hi.every(v => Math.abs(v - 1) < 0.01), mesh && mesh.uv);
 	report('separate roughness (G) and metalness (B) textures packed into one, with the factors', !!mesh && !!mesh.metalRough &&
 		Math.abs(mesh.metalRough[1] - 200) <= 2 && Math.abs(mesh.metalRough[2] - 50) <= 2 && mesh.roughness === 1 && mesh.metalness === 1, mesh);
+	report('the specular color of a physical material is kept (KHR_materials_specular)', !!mesh && !!mesh.specular &&
+		mesh.specular.every(v => Math.abs(v - 2) < 0.01), mesh && mesh.specular);
 }
 
 /* Checks the .glb from the pick + preview end-to-end test: just the cube, textured, standing on the origin. */

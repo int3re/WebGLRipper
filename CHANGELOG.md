@@ -1,5 +1,19 @@
 # Changelog
 
+## 1.3.2
+
+### Changed
+
+- **The preview shows materials.** It used to show only the base color texture under a plain light, so polished metal
+  (seen with a bronze sculpture on supavoxel.com) looked like painted wood, although the downloaded file was exact.
+  Now the normal, roughness and metalness maps are read while the preview is open and shaded with reflections of a
+  soft studio: metal looks like metal. Downloading after the preview is faster too, since those maps are already read.
+
+### Fixed
+
+- The specular strength of glTF materials (three.js `specularColor` / `specularIntensity`, glTF
+  `KHR_materials_specular`) was dropped; GLB files keep it now, so highlights are as strong as on the page.
+
 ## 1.3.1
 
 ### Fixed

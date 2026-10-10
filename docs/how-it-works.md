@@ -129,7 +129,8 @@ reads them (from the recorded setters, a UBO, or `getUniform` as a last resort) 
 that are not material textures at all (shadow maps, environment maps, LUTs, previous frames) which are skipped.
 Color uniforms (`diffuse`, `u_color`, `_Color`, `baseColorFactor`…) become the material color — but not the color of a
 light (`directionalLights[0].color`); a draw without one of those takes any other `…Color` uniform (`uPartColor`) that
-isn't a background, wireframe or highlight color. `roughness` and `metalness` uniforms become the material's factors.
+isn't a background, wireframe or highlight color. `roughness` and `metalness` uniforms become the material's factors,
+and three.js `specularColor` / `specularIntensity` become `KHR_materials_specular`.
 Blending and face culling decide transparency and `doubleSided`.
 
 **Texture transforms.** Optimized glTF files — gltfpack and meshoptimizer output, which AI model generators such as
@@ -229,6 +230,11 @@ can't affect it, and the engine ignores the preview's own WebGL context.
 - Each base color texture is decoded once, straight at preview size (at most 2048 px), even when many meshes share it;
   only a 68 px copy is kept for the list. Colors are shown as a glTF importer shows them (linear factors, sRGB
   textures).
+- **Materials.** The preview opens with base colors; the normal, roughness and metalness maps of the shown meshes are
+  read one by one while it is open and handed over as they arrive (the download then doesn't wait for them). They are
+  shaded with a metallic-roughness model in linear light — normal maps through a tangent frame from screen-space
+  derivatives, reflections of a soft procedural studio (bright top, dark floor, two soft boxes) blurred by roughness —
+  so polished metal looks like metal and not like the flat color of its texture.
 - Fullscreen and pointer lock are released when it opens, so it can't end up hidden behind a fullscreen game.
 
 ## Pick mode

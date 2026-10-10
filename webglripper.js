@@ -817,7 +817,7 @@ const METALNESS_NAMES = new Set(['metalness', 'metallic', 'metallicfactor', 'met
 
 function classifyFactor(name) {
 	const s = String(name).replace(/^.*\./, '').toLowerCase().replace(/[^a-z0-9]/g, '');
-	return ROUGHNESS_NAMES.has(s) ? 'roughness' : METALNESS_NAMES.has(s) ? 'metalness' : null;
+	return ROUGHNESS_NAMES.has(s) ? 'roughness' : METALNESS_NAMES.has(s) ? 'metalness' : s === 'specularintensity' ? 'specularIntensity' : null;
 }
 
 /* The uniform a texture's coordinates are transformed with, found by the sampler's name. Optimized glTF files
@@ -1311,6 +1311,13 @@ class ContextCapture {
 				info.samplers.push({ name, location, slot, priority });
 				continue;
 			}
+			if (active.type === GL.FLOAT_VEC3 && active.name === 'specularColor') {
+				// three.js MeshPhysicalMaterial (glTF KHR_materials_specular), read together with specularIntensity
+				const location = g.getUniformLocation(program, active.name);
+				if (location)
+					info.specularColor = { location, base: active.name };
+				continue;
+			}
 			if (active.type === GL.FLOAT_VEC3 || (active.type === GL.FLOAT_VEC4 && active.size === 1)) {
 				const role = classifyColorUniform(active.name);
 				const location = role && !info.colors[role] && g.getUniformLocation(program, active.name);
@@ -1404,6 +1411,16 @@ class ContextCapture {
 		const value = this.uniformValue(program, source.base, 0, source.location, true);
 		const n = typeof value === 'number' ? value : value && value[0];
 		return Number.isFinite(n) ? Math.min(Math.max(n, 0), 1) : null;
+	}
+
+	/* three.js specular: { intensity, color }, or null when it is the default (1, white) */
+	readSpecular(program, info) {
+		const intensity = this.readFactor(program, info.factors.specularIntensity);
+		const color = this.uniformValue(program, info.specularColor.base, 0, info.specularColor.location, true);
+		if (intensity === null || !color || color.length < 3 || !Array.prototype.every.call(color, Number.isFinite))
+			return null;
+		const rgb = Array.from(color).slice(0, 3).map(c => Math.max(0, c));
+		return intensity === 1 && rgb.every(c => c === 1) ? null : { intensity, color: rgb };
 	}
 
 	/* The coordinate transform of the base color texture (or else of any texture that has one) as
@@ -1928,6 +1945,7 @@ class ContextCapture {
 			emissive: this.readColor(program, info.colors.emissive),
 			roughness: this.readFactor(program, info.factors.roughness),
 			metalness: this.readFactor(program, info.factors.metalness),
+			specular: info.specularColor && info.factors.specularIntensity ? this.readSpecular(program, info) : null,
 			blend: g.isEnabled(GL.BLEND),
 			doubleSided: !culling,
 			insideOut,
@@ -3527,11 +3545,11 @@ function buildMaterials(meshes) {
 		const color = mesh.color ? mesh.color.map(clamp) : null;
 		const emissive = mesh.emissive && mesh.emissive.slice(0, 3).some(c => c > 0) ? mesh.emissive.slice(0, 3).map(clamp) : null;
 		const signature = [slots.map(t => `${t.slot}=${t.entry.index}`).join(';'), color, emissive, mesh.blend, mesh.doubleSided,
-			mesh.roughness, mesh.metalness].join('|');
+			mesh.roughness, mesh.metalness, mesh.specular ? `${mesh.specular.intensity}/${mesh.specular.color}` : ''].join('|');
 		let material = materials.get(signature);
 		if (!material) {
 			material = { name: `mat_${pad(materials.size, meshes.length)}`, slots, color, emissive, blend: mesh.blend, doubleSided: mesh.doubleSided,
-				roughness: mesh.roughness, metalness: mesh.metalness };
+				roughness: mesh.roughness, metalness: mesh.metalness, specular: mesh.specular || null };
 			materials.set(signature, material);
 		}
 		mesh.material = material;
@@ -3579,8 +3597,9 @@ async function readTextures(capture, entries, progress) {
 }
 
 /* Everything that happens once per capture before anything is written or shown: meshes are finalized and textures
- * read back as PNG. With the preview only base color textures are read here (that is what it shows); the others
- * follow after the choice, for the meshes that are downloaded. */
+ * read back as PNG. With the preview only base color textures are read here, so it opens quickly; its normal,
+ * roughness and metalness maps follow while it is open (previewMaterials) and the rest after the choice, for the
+ * meshes that are downloaded. */
 async function prepareCapture(capture, progress, previewing) {
 	const meshes = finalizeMeshes(capture);
 	capture.meshes = []; // dropped duplicates can be garbage collected now
@@ -3679,6 +3698,7 @@ function buildGLB(meshes, flipV, extras, options = {}) {
 	};
 
 	const materialIndex = new Map();
+	let usesSpecular = false;
 	const materialOf = (material) => {
 		let index = materialIndex.get(material);
 		if (index !== undefined)
@@ -3708,6 +3728,10 @@ function buildGLB(meshes, flipV, extras, options = {}) {
 			out.emissiveFactor = [1, 1, 1];
 		} else if (material.emissive) {
 			out.emissiveFactor = material.emissive;
+		}
+		if (material.specular) {
+			out.extensions = { KHR_materials_specular: { specularFactor: material.specular.intensity, specularColorFactor: material.specular.color } };
+			usesSpecular = true;
 		}
 		const translucent = (base && base.entry.png && !base.entry.png.opaque) || pbr.baseColorFactor[3] < 1;
 		if (material.blend && translucent)
@@ -3809,6 +3833,8 @@ function buildGLB(meshes, flipV, extras, options = {}) {
 		json.extensionsUsed = ['KHR_mesh_quantization'];
 		json.extensionsRequired = ['KHR_mesh_quantization'];
 	}
+	if (usesSpecular)
+		json.extensionsUsed = (json.extensionsUsed || []).concat('KHR_materials_specular');
 	if (options.camera) {
 		// glTF cameras look down -Z like GL ones, so the inverted view matrix places it as it is
 		json.cameras = [gltfCamera(options.camera)];
@@ -4222,7 +4248,8 @@ function previewData(capture, scene) {
 }
 
 function previewMesh(capture, mesh) {
-	const base = mesh.textures.find(t => t.slot === 'map_Kd' && t.entry && t.entry.png);
+	const slot = (name) => mesh.textures.find(t => t.slot === name && t.entry && t.entry.png);
+	const base = slot('map_Kd'), normal = slot('map_Bump'), rough = slot('map_Pr'), metal = slot('map_Pm');
 	return {
 		name: mesh.name,
 		positions: mesh.positions,
@@ -4236,10 +4263,44 @@ function previewMesh(capture, mesh) {
 		texture: base ? base.entry.png.blob : null,
 		textureWidth: base ? base.entry.png.width : 0,
 		textureHeight: base ? base.entry.png.height : 0,
+		normalTexture: normal ? normal.entry.png.blob : null,
+		roughnessTexture: rough ? rough.entry.png.blob : null,
+		metalnessTexture: metal ? metal.entry.png.blob : null,
+		roughness: mesh.roughness ?? null,
+		metalness: mesh.metalness ?? null,
 		picked: !!mesh.picked,
 		background: !!mesh.background,
 		selected: capture.pick ? !!mesh.picked : !mesh.background
 	};
+}
+
+const PREVIEW_MAPS = new Set(['map_Bump', 'map_Pr', 'map_Pm']);
+
+/* The preview opens with base colors only. Meanwhile the normal, roughness and metalness maps of the shown meshes are
+ * read one by one and handed to it, until the user has chosen (reading.stop): the rest is read for the download. */
+async function previewMaterials(capture, scene, reading) {
+	if (!viewerApi || typeof viewerApi.update !== 'function')
+		return;
+	const wanted = scene.textures.filter(entry => entry.png === undefined &&
+		scene.meshes.some(mesh => mesh.textures.some(t => t.entry === entry && PREVIEW_MAPS.has(t.slot))));
+	try {
+		for (const entry of wanted) {
+			if (reading.stop)
+				break;
+			entry.png = await readTexturePNG(entry, capture.settings.unflip);
+			if (reading.stop || !entry.png)
+				continue;
+			scene.meshes.forEach((mesh, index) => {
+				if (mesh.textures.some(t => t.entry === entry))
+					viewerApi.update(index, previewMesh(capture, mesh));
+			});
+		}
+	} catch (err) {
+		log('Preview materials failed:', err);
+	} finally {
+		for (const context of capture.contexts.values())
+			context.disposeReader();
+	}
 }
 
 const OBJECTS_SHOWN = 12;
@@ -4404,7 +4465,12 @@ async function finishCapture(capture) {
 		let compact = capture.settings.compact;
 		if (previewing) {
 			setStatus('preview', tr('Choose what to keep in the page, then press Download.'));
-			const choice = await chooser(previewData(capture, scene));
+			const reading = { stop: false };
+			const opened = chooser(previewData(capture, scene));
+			const materials = previewMaterials(capture, scene, reading);
+			const choice = await opened;
+			reading.stop = true;
+			await materials; // the texture being read is finished first
 			if (!choice || !choice.selected || !choice.selected.length) {
 				setStatus('idle', tr('Cancelled, nothing was downloaded.'));
 				return;

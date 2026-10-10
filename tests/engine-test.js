@@ -107,7 +107,7 @@ function unitTests() {
 
 	const factor = (n) => I.classifyFactor(n);
 	check('factors: roughness and metalness uniforms', factor('roughness') === 'roughness' && factor('metalness') === 'metalness' &&
-		factor('material_metalness') === 'metalness' && factor('u_roughnessIntensity') === null);
+		factor('material_metalness') === 'metalness' && factor('u_roughnessIntensity') === null && factor('specularIntensity') === 'specularIntensity');
 	const types = (entries) => new Map(entries.map(([name, type]) => [name, { type }]));
 	const MAT3 = 0x8B5B, MAT4 = 0x8B5C, VEC3 = 0x8B51, VEC4 = 0x8B52;
 	const uvt = (sampler, entries) => { const t = I.uvTransformUniform(sampler, types(entries)); return t && `${t.kind}:${t.names.join(',')}`; };

@@ -203,9 +203,18 @@ in vec2 vUv;
 in vec3 vPosition;
 in vec3 vColor;
 uniform sampler2D map;
+uniform sampler2D normalMap;
+uniform sampler2D roughnessMap;
+uniform sampler2D metalnessMap;
 uniform float useMap;
+uniform float useNormalMap;
+uniform float useRoughnessMap;
+uniform float useMetalnessMap;
 uniform float useColors;
 uniform float hasNormals;
+uniform float flipV;
+uniform float roughness;
+uniform float metalness;
 uniform vec4 color;
 uniform vec3 eye;
 uniform vec3 tint;
@@ -214,22 +223,62 @@ uniform float alpha;
 uniform vec4 idColor;
 uniform float idPass;
 out vec4 outColor;
+
+// A soft studio around the model: light from above, a dark floor and two soft boxes, so that metal has something to
+// reflect. Rough surfaces see a blurred version of it.
+vec3 studio(vec3 d, float rough) {
+	vec3 sky = mix(vec3(0.42, 0.43, 0.46), vec3(1.2, 1.21, 1.25), smoothstep(0.0, 0.9, d.y));
+	vec3 env = mix(vec3(0.06, 0.06, 0.065), sky, smoothstep(-0.3, 0.05, d.y));
+	float sharp = mix(80.0, 2.0, rough);
+	float boxes = 3.2 * pow(max(dot(d, normalize(vec3(0.55, 0.45, 0.7))), 0.0), sharp)
+		+ 1.8 * pow(max(dot(d, normalize(vec3(-0.75, 0.25, -0.45))), 0.0), sharp);
+	return env + vec3(boxes * mix(1.0, 0.25, rough));
+}
+
 void main() {
 	if (idPass > 0.5) {
 		outColor = idColor;
 		return;
 	}
+	vec3 v = normalize(eye - vPosition);
 	vec3 n = hasNormals > 0.5 ? normalize(vNormal) : normalize(cross(dFdx(vPosition), dFdy(vPosition)));
-	vec3 toEye = normalize(eye - vPosition);
-	if (dot(n, toEye) < 0.0)
+	if (dot(n, v) < 0.0)
 		n = -n;
-	float light = max(dot(n, normalize(toEye + vec3(0.25, 0.6, 0.2))), 0.0);
-	vec4 base = color * (useMap > 0.5 ? texture(map, vUv) : vec4(1.0));
+	if (useNormalMap > 0.5) {
+		// tangent frame from screen-space derivatives (no tangents needed)
+		vec3 mapN = texture(normalMap, vUv).xyz * 2.0 - 1.0;
+		mapN.y *= flipV > 0.5 ? 1.0 : -1.0;
+		vec3 q0 = dFdx(vPosition), q1 = dFdy(vPosition);
+		vec2 st0 = dFdx(vUv), st1 = dFdy(vUv);
+		vec3 q1perp = cross(q1, n), q0perp = cross(n, q0);
+		vec3 t = q1perp * st0.x + q0perp * st1.x;
+		vec3 b = q1perp * st0.y + q0perp * st1.y;
+		float det = max(dot(t, t), dot(b, b));
+		if (det > 0.0)
+			n = normalize(t * (mapN.x * inversesqrt(det)) + b * (mapN.y * inversesqrt(det)) + n * mapN.z);
+	}
+	// lighting in linear light: textures are sRGB, material and vertex colors linear (as in glTF)
+	vec4 texel = useMap > 0.5 ? texture(map, vUv) : vec4(1.0);
+	vec3 albedo = color.rgb * pow(texel.rgb, vec3(2.2));
 	if (useColors > 0.5)
-		base.rgb *= pow(clamp(vColor, 0.0, 1.0), vec3(1.0 / 2.2)); // vertex colors are linear, like material colors
-	vec3 lit = base.rgb * (0.38 + 0.72 * light);
-	outColor = vec4(mix(lit, tint, tintAmount), alpha);
+		albedo *= clamp(vColor, 0.0, 1.0);
+	float rough = clamp(roughness * (useRoughnessMap > 0.5 ? texture(roughnessMap, vUv).g : 1.0), 0.05, 1.0);
+	float metal = clamp(metalness * (useMetalnessMap > 0.5 ? texture(metalnessMap, vUv).b : 1.0), 0.0, 1.0);
+	float nv = max(dot(n, v), 0.0);
+	vec3 f0 = mix(vec3(0.04), albedo, metal);
+	vec3 fresnel = f0 + (max(vec3(1.0 - rough), f0) - f0) * pow(1.0 - nv, 5.0);
+	vec3 specular = studio(reflect(-v, n), rough) * fresnel;
+	vec3 key = normalize(v + vec3(0.25, 0.6, 0.2)); // follows the camera
+	vec3 diffuse = albedo * (1.0 - metal) * (studio(n, 1.0) * 0.3 + max(dot(n, key), 0.0));
+	vec3 lit = diffuse + specular;
+	lit /= 1.0 + 0.15 * lit; // soft shoulder for bright highlights
+	outColor = vec4(mix(pow(lit, vec3(1.0 / 2.2)), tint, tintAmount), alpha);
 }`;
+
+/* The textures of a preview mesh: data key, sampler, "use" flag. The unit is the index. */
+let openView = null; // the preview on screen, for update()
+const MAPS = [['texture', 'map', 'useMap'], ['normalTexture', 'normalMap', 'useNormalMap'],
+	['roughnessTexture', 'roughnessMap', 'useRoughnessMap'], ['metalnessTexture', 'metalnessMap', 'useMetalnessMap']];
 
 class View {
 	constructor(canvas, data) {
@@ -264,8 +313,11 @@ class View {
 			return;
 		}
 		this.uniforms = {};
-		for (const name of ['viewProjection', 'flipV', 'map', 'useMap', 'useColors', 'hasNormals', 'color', 'eye', 'tint', 'tintAmount', 'alpha', 'idColor', 'idPass'])
+		for (const name of ['viewProjection', 'flipV', 'map', 'normalMap', 'roughnessMap', 'metalnessMap', 'useMap', 'useNormalMap',
+			'useRoughnessMap', 'useMetalnessMap', 'roughness', 'metalness', 'useColors', 'hasNormals', 'color', 'eye', 'tint', 'tintAmount', 'alpha', 'idColor', 'idPass'])
 			this.uniforms[name] = gl.getUniformLocation(program, name);
+		gl.useProgram(program);
+		MAPS.forEach(([, uniform], unit) => gl.uniform1i(this.uniforms[uniform], unit));
 
 		for (const [index, mesh] of data.meshes.entries())
 			this.meshes.push(this.upload(mesh, index));
@@ -306,37 +358,52 @@ class View {
 				if (p[i + k] > hi[k]) hi[k] = p[i + k];
 			}
 		}
-		const entry = { index, vao, buffers, count: mesh.triangles.length, texture: null, bitmap: null, lo, hi, source: mesh };
-		entry.loading = mesh.texture ? this.loadTexture(entry, mesh) : null;
+		const entry = { index, vao, buffers, count: mesh.triangles.length, texture: null, bitmap: null, lo, hi, source: mesh, loaded: new Map() };
+		entry.loading = this.loadMaps(entry);
 		return entry;
 	}
 
-	async loadTexture(entry, mesh) {
+	/* The base color texture first (it also gives the list its picture), then the maps that make metal look like metal.
+	 * Maps can arrive later (see update), so this runs again and only loads what is new. */
+	async loadMaps(entry) {
 		if (!native.createImageBitmap)
 			return;
-		// Meshes often share a texture (atlases): each one is decoded and uploaded once
-		let shared = this.textures.get(mesh.texture);
-		if (!shared)
-			this.textures.set(mesh.texture, shared = this.decodeTexture(mesh.texture, mesh.textureWidth, mesh.textureHeight));
-		const decoded = await shared;
-		if (!decoded || this.disposed)
-			return;
-		entry.texture = decoded.texture;
-		entry.bitmap = decoded.thumbnail;
-		if (this.onTexture)
-			this.onTexture(entry);
-		this.request();
+		for (const [key] of MAPS) {
+			const blob = entry.source[key];
+			if (!blob || entry.loaded.get(key) === blob)
+				continue;
+			entry.loaded.set(key, blob);
+			// Meshes often share a texture (atlases): each one is decoded and uploaded once
+			let shared = this.textures.get(blob);
+			if (!shared) {
+				const base = key === 'texture';
+				this.textures.set(blob, shared = this.decodeTexture(blob, base ? entry.source.textureWidth : 0, base ? entry.source.textureHeight : 0, base));
+			}
+			const decoded = await shared;
+			if (!decoded || this.disposed)
+				return;
+			entry[key] = decoded.texture;
+			if (key === 'texture')
+				entry.bitmap = decoded.thumbnail;
+			if (this.onTexture)
+				this.onTexture(entry);
+			this.request();
+		}
 	}
 
-	/* Decodes a PNG straight at preview size (at most 2048 pixels) and keeps only a small copy for the list. */
-	async decodeTexture(blob, width, height) {
-		const scale = width > 0 && height > 0 ? Math.min(1, 2048 / Math.max(width, height)) : 1;
+	/* Decodes a PNG straight at preview size (at most 2048 pixels, less for thumbnails); the base color also keeps a
+	 * small copy for the list. */
+	async decodeTexture(blob, width, height, withThumbnail) {
+		const limit = this.data.textureLimit || 2048;
+		const scale = width > 0 && height > 0 ? Math.min(1, limit / Math.max(width, height)) : 1;
 		let bitmap = null;
 		try {
 			try {
 				bitmap = scale < 1
 					? await native.createImageBitmap(blob, { resizeWidth: Math.max(1, Math.round(width * scale)), resizeHeight: Math.max(1, Math.round(height * scale)), resizeQuality: 'medium' })
-					: await native.createImageBitmap(blob);
+					: this.data.textureLimit && !(width > 0) // size unknown: the width alone keeps the aspect ratio
+						? await native.createImageBitmap(blob, { resizeWidth: limit, resizeQuality: 'medium' })
+						: await native.createImageBitmap(blob);
 			} catch (err) {
 				bitmap = await native.createImageBitmap(blob); // resize options not supported
 			}
@@ -354,10 +421,11 @@ class View {
 			gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.REPEAT);
 			let thumbnail = null;
 			try {
-				thumbnail = await native.createImageBitmap(bitmap, { resizeWidth: 68, resizeHeight: 68, resizeQuality: 'medium' });
-				if (this.disposed)
+				if (withThumbnail)
+					thumbnail = await native.createImageBitmap(bitmap, { resizeWidth: 68, resizeHeight: 68, resizeQuality: 'medium' });
+				if (thumbnail && this.disposed)
 					thumbnail.close();
-				else
+				else if (thumbnail)
 					this.thumbnails.push(thumbnail);
 			} catch (err) {
 				// the list shows the material color instead
@@ -457,17 +525,21 @@ class View {
 	drawMesh(mesh, alpha, tintAmount) {
 		const gl = this.gl, u = this.uniforms, source = mesh.source;
 		// Material colors are linear (as in glTF) and textures are sRGB: shown the way a glTF importer shows them
-		const color = (source.color || [0.6, 0.6, 0.62, 1]).map(srgb);
+		const color = source.color || [0.6, 0.6, 0.62, 1];
 		gl.uniform4f(u.color, color[0], color[1], color[2], 1);
-		gl.uniform1f(u.useMap, mesh.texture ? 1 : 0);
+		MAPS.forEach(([key, , flag], unit) => {
+			const usable = !!mesh[key] && (key === 'texture' || !!source.uvs);
+			gl.uniform1f(u[flag], usable ? 1 : 0);
+			gl.activeTexture(gl.TEXTURE0 + unit);
+			gl.bindTexture(gl.TEXTURE_2D, usable ? mesh[key] : null);
+		});
+		gl.activeTexture(gl.TEXTURE0);
+		gl.uniform1f(u.metalness, source.metalness ?? (mesh.metalnessTexture ? 1 : 0));
+		gl.uniform1f(u.roughness, source.roughness ?? 1);
 		gl.uniform1f(u.useColors, source.colors ? 1 : 0);
 		gl.uniform1f(u.hasNormals, source.normals ? 1 : 0);
 		gl.uniform1f(u.alpha, alpha);
 		gl.uniform1f(u.tintAmount, tintAmount);
-		if (mesh.texture) {
-			gl.activeTexture(gl.TEXTURE0);
-			gl.bindTexture(gl.TEXTURE_2D, mesh.texture);
-		}
 		gl.bindVertexArray(mesh.vao);
 		gl.drawElements(gl.TRIANGLES, mesh.count, gl.UNSIGNED_INT, 0);
 	}
@@ -502,7 +574,8 @@ class View {
 		gl.depthMask(false);
 		// ground grid
 		gl.uniform4f(u.color, 1, 1, 1, 1);
-		gl.uniform1f(u.useMap, 0);
+		for (const [, , flag] of MAPS)
+			gl.uniform1f(u[flag], 0);
 		gl.uniform1f(u.useColors, 0);
 		gl.uniform1f(u.hasNormals, 0);
 		gl.uniform1f(u.tintAmount, 1);
@@ -799,7 +872,7 @@ function open(data) {
 		append(backdrop, stage, aside);
 		append(root, backdrop);
 
-		const view = new View(canvas, data);
+		const view = openView = new View(canvas, data);
 		if (!view.gl)
 			append(stage, element('div', 'fallback', t('3D preview is not available in this browser. The list still works.')));
 		let format = data.format;
@@ -1028,6 +1101,8 @@ function open(data) {
 			if (rowObserver)
 				rowObserver.disconnect();
 			native.clearTimeout(hoverTimer);
+			if (openView === view)
+				openView = null;
 			view.dispose();
 			host.remove();
 			resolve(result);
@@ -1045,13 +1120,26 @@ function open(data) {
 	});
 }
 
+/* Maps read while the preview is open (normal, roughness, metalness): the engine hands them over mesh by mesh. */
+function update(index, mesh) {
+	const view = openView;
+	const entry = view && view.gl && view.meshes[index];
+	if (!entry || !mesh)
+		return;
+	for (const key of ['normalTexture', 'roughnessTexture', 'metalnessTexture', 'roughness', 'metalness']) {
+		if (mesh[key] !== undefined)
+			entry.source[key] = mesh[key];
+	}
+	entry.loading = Promise.resolve(entry.loading).then(() => view.loadMaps(entry));
+}
+
 /* Small rendered pictures of meshes (the popup lists what was saved): data: URLs, in the order given. */
 async function thumbnails(meshes, flipV, size = 64) {
 	if (!meshes.length)
 		return [];
 	const canvas = element('canvas');
 	canvas.width = canvas.height = 1;
-	const view = new View(canvas, { meshes, flipV });
+	const view = new View(canvas, { meshes, flipV, textureLimit: 256 });
 	try {
 		if (!view.gl)
 			return [];
@@ -1075,5 +1163,5 @@ async function thumbnails(meshes, flipV, size = 64) {
 	}
 }
 
-registry.registerViewer({ open, hint, thumbnails });
+registry.registerViewer({ open, hint, thumbnails, update });
 })();
